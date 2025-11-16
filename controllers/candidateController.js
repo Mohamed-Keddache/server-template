@@ -2,6 +2,8 @@ import Candidate from "../models/Candidate.js";
 import Offer from "../models/Offer.js";
 import User from "../models/User.js";
 import { uploadCV } from "../config/multer.js";
+import Recruiter from "../models/Recruiter.js";
+import Notification from "../models/Notification.js";
 import fs from "fs";
 import path from "path";
 
@@ -106,35 +108,49 @@ export const applyToOffer = async (req, res) => {
     const candidate = await Candidate.findOne({ userId });
     if (!candidate) return res.status(404).json({ msg: "Profil introuvable." });
 
-    // Vérifier profil complet
+    // Vérifications profil
     if (!candidate.telephone || !candidate.wilaya)
       return res
         .status(400)
         .json({ msg: "Veuillez compléter votre profil avant de postuler." });
 
+    // Vérification CV
     if (candidate.cvs.length === 0)
       return res
         .status(400)
         .json({ msg: "Veuillez ajouter au moins un CV avant de postuler." });
 
-    const offer = await Offer.findById(offreId);
+    // --- ✔ CORRECTION : populate complet du recruteur ---
+    const offer = await Offer.findById(offreId).populate("recruteurId");
     if (!offer) return res.status(404).json({ msg: "Offre introuvable." });
+
+    // Vérifier si l'offre est active
+    if (!offer.actif)
+      return res.status(400).json({ msg: "Cette offre est désactivée." });
+
+    if (!offer.recruteurId) {
+      return res
+        .status(404)
+        .json({ msg: "L'entreprise pour cette offre n'existe plus." });
+    }
 
     // Vérifier si déjà postulé
     const dejaPostule = offer.candidatures.some(
       (c) => c.candidatId.toString() === candidate._id.toString()
     );
     if (dejaPostule)
-      return res
-        .status(400)
-        .json({ msg: "Vous avez déjà postulé à cette offre." });
+      return res.status(400).json({
+        msg: "Vous avez déjà postulé à cette offre.",
+      });
 
+    // Ajouter candidature
     offer.candidatures.push({
       candidatId: candidate._id,
       cvUrl,
       statut: "en attente",
     });
 
+    // Historique candidat
     candidate.historique.push({
       offreId: offer._id,
       entreprise: offer.recruteurId?.entrepriseNom || "Entreprise inconnue",
@@ -145,6 +161,15 @@ export const applyToOffer = async (req, res) => {
 
     await offer.save();
     await candidate.save();
+
+    // --- ✔ AJOUT : créer une notification pour le recruteur ---
+    if (offer.recruteurId && offer.recruteurId.userId) {
+      await Notification.create({
+        userId: offer.recruteurId.userId,
+        message: `Vous avez reçu une nouvelle candidature pour votre offre "${offer.titre}".`,
+        type: "info",
+      });
+    }
 
     res.json({ msg: "Votre candidature a bien été envoyée ✅" });
   } catch (err) {

@@ -7,7 +7,6 @@ import {
   updateProfile,
   uploadCandidateCV,
   deleteCV,
-  getAllOffers,
   applyToOffer,
   getHistorique,
   updateAccount,
@@ -25,9 +24,6 @@ router.put("/profil", updateProfile);
 //Upload / suppression des CV
 router.post("/upload-cv", uploadCV.single("cv"), uploadCandidateCV);
 router.delete("/delete-cv/:cvId", deleteCV);
-
-//Consulter les offres disponibles
-router.get("/offres", getAllOffers);
 
 //Postuler à une offre
 router.post("/postuler", applyToOffer);

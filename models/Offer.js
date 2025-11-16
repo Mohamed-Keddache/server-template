@@ -9,11 +9,20 @@ const offerSchema = new mongoose.Schema(
     },
     titre: { type: String, required: true },
     description: { type: String, required: true },
+    photo: { type: String },
     domaine: { type: String },
     niveau: { type: String },
     experience: { type: String },
     salaire: { type: Number },
+    wilaya: { type: String },
     datePublication: { type: Date, default: Date.now },
+    actif: { type: Boolean, default: true },
+
+    typeSelection: {
+      type: String,
+      enum: ["automatique", "manuelle", "ouvert"],
+      default: "ouvert",
+    },
 
     candidatures: [
       {
