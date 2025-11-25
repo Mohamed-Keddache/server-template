@@ -11,6 +11,11 @@ const candidateSchema = new mongoose.Schema(
     telephone: { type: String },
     wilaya: { type: String },
 
+    autoriserProposition: {
+      type: Boolean,
+      default: true, // Activé par défaut
+    },
+    favoris: [{ type: mongoose.Schema.Types.ObjectId, ref: "Offer" }],
     cvs: [
       {
         url: { type: String, required: true },

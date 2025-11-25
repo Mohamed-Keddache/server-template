@@ -73,18 +73,18 @@ export const login = async (req, res) => {
     const ok = await bcrypt.compare(motDePasse, user.motDePasse);
     if (!ok) return res.status(401).json({ msg: "Mot de passe incorrect" });
 
-    if (user.role === "recruteur") {
-      if (user.statutValidation === "en attente") {
-        return res.status(403).json({
-          msg: "Votre compte recruteur est en attente de validation par un administrateur.",
-        });
-      }
+    // --- Vérifie "rejeté" pour TOUS les utilisateurs ---
+    if (user.statutValidation === "rejeté") {
+      return res.status(403).json({
+        msg: "Votre compte a été suspendu. Veuillez contacter l'administrateur.",
+      });
+    }
 
-      if (user.statutValidation === "rejeté") {
-        return res.status(403).json({
-          msg: "Votre compte recruteur a été refusé par un administrateur.",
-        });
-      }
+    // --- Cas particulier : recruteur en attente ---
+    if (user.role === "recruteur" && user.statutValidation === "en attente") {
+      return res.status(403).json({
+        msg: "Votre compte recruteur est en attente de validation par un administrateur.",
+      });
     }
 
     const token = jwt.sign(

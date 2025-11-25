@@ -153,7 +153,13 @@ export const uploadCV = multer({ storage, fileFilter });
 === controllers\adminController.js ===
 import User from "../models/User.js";
 import Recruiter from "../models/Recruiter.js";
+import Candidate from "../models/Candidate.js";
+import Offer from "../models/Offer.js";
+import Admin from "../models/Admin.js";
 import Notification from "../models/Notification.js";
+import bcrypt from "bcryptjs";
+
+
 
 
 export const getPendingRecruiters = async (req, res) => {
@@ -174,16 +180,16 @@ export const getPendingRecruiters = async (req, res) => {
 export const validateRecruiter = async (req, res) => {
   try {
     const { id } = req.params;
-    const recruiter = await User.findById(id);
+    const user = await User.findById(id);
 
-    if (!recruiter || recruiter.role !== "recruteur")
+    if (!user || user.role !== "recruteur")
       return res.status(404).json({ msg: "Recruteur introuvable" });
 
-    recruiter.statutValidation = "validé";
-    await recruiter.save();
+    user.statutValidation = "validé";
+    await user.save();
 
     await Notification.create({
-      userId: recruiter._id,
+      userId: user._id,
       message: "Félicitations ! Votre compte recruteur a été validé.",
       type: "validation",
     });
@@ -198,8 +204,8 @@ export const rejectRecruiter = async (req, res) => {
   try {
     const { id } = req.params;
     const { message } = req.body;
-    const recruiter = await User.findById(id);
 
+    const recruiter = await User.findById(id);
     if (!recruiter || recruiter.role !== "recruteur")
       return res.status(404).json({ msg: "Recruteur introuvable" });
 
@@ -212,7 +218,374 @@ export const rejectRecruiter = async (req, res) => {
       message: `Votre compte recruteur a été rejeté. Raison : ${raison}`,
       type: "alerte",
     });
+
     res.json({ msg: "Recruteur rejeté ❌" });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+
+
+export const createAdmin = async (req, res) => {
+  try {
+    const { nom, email, motDePasse } = req.body;
+
+    const exist = await User.findOne({ email });
+    if (exist) return res.status(400).json({ msg: "Email déjà utilisé" });
+
+    const hash = await bcrypt.hash(motDePasse, 10);
+    const user = await User.create({
+      nom,
+      email,
+      motDePasse: hash,
+      role: "admin",
+      statutValidation: "validé",
+    });
+
+    await Admin.create({ userId: user._id });
+
+    res.status(201).json({ msg: "Nouvel administrateur créé ✅", admin: user });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+export const deleteAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (id === req.user.id)
+      return res
+        .status(400)
+        .json({ msg: "Vous ne pouvez pas vous supprimer vous-même." });
+
+    const adminUser = await User.findById(id);
+    if (!adminUser || adminUser.role !== "admin")
+      return res.status(404).json({ msg: "Admin introuvable" });
+
+    await User.findByIdAndDelete(id);
+    await Admin.findOneAndDelete({ userId: id });
+
+    res.json({ msg: "Administrateur supprimé 🗑️" });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+
+
+export const banUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { raison } = req.body;
+
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ msg: "Utilisateur introuvable" });
+    if (user.role === "admin")
+      return res.status(403).json({ msg: "Impossible de bannir un admin." });
+
+    user.statutValidation = "rejeté";
+    await user.save();
+
+    await Notification.create({
+      userId: user._id,
+      message: `Votre compte a été désactivé. Raison : ${
+        raison || "Non respect des conditions."
+      }`,
+      type: "alerte",
+    });
+
+    res.json({ msg: `Utilisateur ${user.nom} a été banni ⛔` });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+export const unBanUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const user = await User.findById(id);
+    if (!user) return res.status(404).json({ msg: "Utilisateur introuvable" });
+
+    
+    if (user.role === "admin") {
+      return res.status(400).json({ msg: "Action inutile sur un admin." });
+    }
+
+    if (user.statutValidation === "validé") {
+      return res.status(400).json({ msg: "Cet utilisateur n'est pas banni." });
+    }
+
+    
+    user.statutValidation = "validé";
+    await user.save();
+
+    
+    await Notification.create({
+      userId: user._id,
+      message:
+        "Bonne nouvelle ! Votre compte a été réactivé par l'administration. Vous pouvez à nouveau vous connecter.",
+      type: "info", 
+    });
+
+    res.json({ msg: `L'utilisateur ${user.nom} a été débanni et réactivé ✅` });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+
+
+export const getAllUsers = async (req, res) => {
+  try {
+    const { role, wilaya, proposable } = req.query;
+    let query = {};
+
+    if (role) query.role = role;
+
+    
+    let users = await User.find(query)
+      .select("-motDePasse")
+      .sort({ createdAt: -1 });
+
+    
+    const enriched = await Promise.all(
+      users.map(async (u) => {
+        let details = {};
+
+        if (u.role === "candidat") {
+          const cand = await Candidate.findOne({ userId: u._id });
+          if (cand)
+            details = {
+              wilaya: cand.wilaya,
+              telephone: cand.telephone,
+              autoriserProposition: cand.autoriserProposition,
+            };
+        } else if (u.role === "recruteur") {
+          const rec = await Recruiter.findOne({ userId: u._id });
+          if (rec)
+            details = {
+              entreprise: rec.entrepriseNom,
+              offres: rec.offres.length,
+            };
+        }
+
+        return { ...u.toObject(), ...details };
+      })
+    );
+
+    let finalUsers = enriched;
+
+    
+    if (wilaya) {
+      finalUsers = finalUsers.filter(
+        (u) => u.wilaya && u.wilaya.toLowerCase() === wilaya.toLowerCase()
+      );
+    }
+
+    
+    if (proposable === "true") {
+      finalUsers = finalUsers.filter((u) => {
+        if (u.role === "candidat") {
+          return u.autoriserProposition === true;
+        }
+        return false; 
+      });
+    }
+
+    res.json(finalUsers);
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+
+
+export const sendMessageToUser = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { message } = req.body;
+
+    await Notification.create({
+      userId: id,
+      message: `Message de l'administration : ${message}`,
+      type: "info",
+    });
+
+    res.json({ msg: "Notification envoyée ✅" });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+
+
+export const deleteOfferAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { motif } = req.body;
+
+    const offer = await Offer.findById(id).populate("recruteurId");
+    if (!offer) return res.status(404).json({ msg: "Offre introuvable" });
+
+    
+    if (offer.recruteurId && offer.recruteurId.userId) {
+      await Notification.create({
+        userId: offer.recruteurId.userId,
+        message: `Votre offre "${offer.titre}" a été supprimée. Motif : ${
+          motif || "Non conforme"
+        }`,
+        type: "alerte",
+      });
+    }
+
+    await Offer.findByIdAndDelete(id);
+    await Recruiter.updateOne(
+      { _id: offer.recruteurId._id },
+      { $pull: { offres: id } }
+    );
+
+    res.json({ msg: "Offre supprimée et recruteur notifié 🗑️" });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+
+
+export const getGlobalStats = async (req, res) => {
+  try {
+    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+    const onlineUsers = await User.countDocuments({
+      derniereConnexion: { $gt: fifteenMinutesAgo },
+    });
+
+    const candidatesStats = await Candidate.aggregate([
+      { $unwind: "$historique" },
+      { $group: { _id: "$historique.statut", total: { $sum: 1 } } },
+    ]);
+
+    const recruitersStats = await Offer.aggregate([
+      { $unwind: "$candidatures" },
+      { $group: { _id: "$candidatures.statut", total: { $sum: 1 } } },
+    ]);
+
+    const totalOffres = await Offer.countDocuments();
+    const offresActives = await Offer.countDocuments({ actif: true });
+
+    const format = (arr) => {
+      const r = { en_attente: 0, acceptee: 0, rejetee: 0 };
+      arr.forEach((i) => {
+        if (i._id === "en attente") r.en_attente = i.total;
+        if (i._id.startsWith("accept")) r.acceptee = i.total;
+        if (i._id.startsWith("rejet")) r.rejetee = i.total;
+      });
+      return r;
+    };
+
+    res.json({
+      online_users: onlineUsers,
+      offres: { total: totalOffres, actives: offresActives },
+      candidatures_envoyees: format(candidatesStats),
+      candidatures_recues: format(recruitersStats),
+    });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+export const getManualSelectionOffers = async (req, res) => {
+  try {
+    const offers = await Offer.find({
+      actif: true,
+      typeSelection: "manuelle",
+    })
+      .populate("recruteurId", "entrepriseNom email")
+      .sort({ datePublication: -1 });
+
+    res.json(offers);
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+
+export const proposeCandidateToOffer = async (req, res) => {
+  try {
+    const { candidatId, offreId } = req.body;
+
+    
+    const offer = await Offer.findById(offreId).populate("recruteurId");
+    if (!offer) return res.status(404).json({ msg: "Offre introuvable" });
+
+    const candidate = await Candidate.findById(candidatId).populate("userId");
+    if (!candidate)
+      return res.status(404).json({ msg: "Candidat introuvable" });
+
+    if (candidate.autoriserProposition === false) {
+      return res.status(403).json({
+        msg: `Impossible : Le candidat ${candidate.userId.nom} refuse d'être proposé manuellement aux recruteurs.`,
+      });
+    }
+
+    
+    const dejaPresent = offer.candidatures.some(
+      (c) => c.candidatId.toString() === candidatId
+    );
+    if (dejaPresent)
+      return res
+        .status(400)
+        .json({ msg: "Ce candidat est déjà dans la liste." });
+
+    
+    if (candidate.cvs.length === 0) {
+      return res
+        .status(400)
+        .json({ msg: "Ce candidat n'a pas de CV disponible." });
+    }
+    const lastCv = candidate.cvs[candidate.cvs.length - 1].url;
+
+    
+    offer.candidatures.push({
+      candidatId: candidate._id,
+      cvUrl: lastCv,
+      statut: "proposé", 
+      recommandeParAdmin: true, 
+      datePostulation: new Date(),
+    });
+
+    
+    candidate.historique.push({
+      offreId: offer._id,
+      entreprise: offer.recruteurId.entrepriseNom,
+      statut: "en attente", 
+      date: new Date(),
+      changements: 0,
+    });
+
+    await offer.save();
+    await candidate.save();
+
+    
+    
+    if (offer.recruteurId && offer.recruteurId.userId) {
+      await Notification.create({
+        userId: offer.recruteurId.userId,
+        message: `L'administrateur vous propose un candidat idéal (${candidate.userId.nom}) pour votre offre "${offer.titre}".`,
+        type: "validation",
+      });
+    }
+
+    
+    await Notification.create({
+      userId: candidate.userId._id,
+      message: `Bonne nouvelle ! Votre profil a été recommandé par un administrateur pour l'offre "${offer.titre}" chez ${offer.recruteurId.entrepriseNom}.`,
+      type: "info",
+    });
+
+    res.json({ msg: "Candidat proposé avec succès ✅" });
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }
@@ -295,18 +668,18 @@ export const login = async (req, res) => {
     const ok = await bcrypt.compare(motDePasse, user.motDePasse);
     if (!ok) return res.status(401).json({ msg: "Mot de passe incorrect" });
 
-    if (user.role === "recruteur") {
-      if (user.statutValidation === "en attente") {
-        return res.status(403).json({
-          msg: "Votre compte recruteur est en attente de validation par un administrateur.",
-        });
-      }
+    
+    if (user.statutValidation === "rejeté") {
+      return res.status(403).json({
+        msg: "Votre compte a été suspendu. Veuillez contacter l'administrateur.",
+      });
+    }
 
-      if (user.statutValidation === "rejeté") {
-        return res.status(403).json({
-          msg: "Votre compte recruteur a été refusé par un administrateur.",
-        });
-      }
+    
+    if (user.role === "recruteur" && user.statutValidation === "en attente") {
+      return res.status(403).json({
+        msg: "Votre compte recruteur est en attente de validation par un administrateur.",
+      });
     }
 
     const token = jwt.sign(
@@ -347,14 +720,19 @@ import path from "path";
 export const updateProfile = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { telephone, wilaya } = req.body;
+    const { telephone, wilaya, autoriserProposition } = req.body;
 
     let candidate = await Candidate.findOne({ userId });
+
     if (!candidate) {
       candidate = new Candidate({ userId, telephone, wilaya });
     } else {
-      candidate.telephone = telephone;
-      candidate.wilaya = wilaya;
+      if (telephone) candidate.telephone = telephone;
+      if (wilaya) candidate.wilaya = wilaya;
+
+      if (autoriserProposition !== undefined) {
+        candidate.autoriserProposition = autoriserProposition;
+      }
     }
 
     await candidate.save();
@@ -706,6 +1084,20 @@ export const createOffer = async (req, res) => {
     recruiter.offres.push(savedOffer._id);
     await recruiter.save();
 
+    if (typeSelection === "manuelle") {
+      
+      const admins = await User.find({ role: "admin" });
+
+      
+      for (const admin of admins) {
+        await Notification.create({
+          userId: admin._id,
+          message: `URGENT : Le recruteur ${recruiter.entrepriseNom} demande une sélection manuelle pour l'offre "${savedOffer.titre}".`,
+          type: "alerte", 
+        });
+      }
+    }
+
     res
       .status(201)
       .json({ msg: "Offre créée avec succès ✅", offer: savedOffer });
@@ -956,6 +1348,10 @@ const candidateSchema = new mongoose.Schema(
     telephone: { type: String },
     wilaya: { type: String },
 
+    autoriserProposition: {
+      type: Boolean,
+      default: true, 
+    },
     cvs: [
       {
         url: { type: String, required: true },
@@ -1042,9 +1438,10 @@ const offerSchema = new mongoose.Schema(
         cvUrl: { type: String },
         statut: {
           type: String,
-          enum: ["en attente", "accepté", "rejeté"],
+          enum: ["en attente", "accepté", "rejeté", "proposé"],
           default: "en attente",
         },
+        recommandeParAdmin: { type: Boolean, default: false },
         datePostulation: { type: Date, default: Date.now },
       },
     ],
@@ -1069,20 +1466,7 @@ const recruiterSchema = new mongoose.Schema(
     entrepriseNom: { type: String, required: true },
     registreCommerce: { type: String, required: true },
     description: { type: String },
-    statutValidation: {
-      type: String,
-      enum: ["en attente", "validé", "rejeté"],
-      default: "en attente",
-    },
     offres: [{ type: mongoose.Schema.Types.ObjectId, ref: "Offer" }],
-
-    notifications: [
-      {
-        message: { type: String },
-        date: { type: Date, default: Date.now },
-        lu: { type: Boolean, default: false },
-      },
-    ],
   },
   { timestamps: true }
 );
@@ -1124,15 +1508,47 @@ import {
   getPendingRecruiters,
   validateRecruiter,
   rejectRecruiter,
+  createAdmin,
+  deleteAdmin,
+  banUser,
+  unBanUser,
+  getAllUsers,
+  sendMessageToUser,
+  deleteOfferAdmin,
+  getGlobalStats,
+  getManualSelectionOffers,
+  proposeCandidateToOffer,
 } from "../controllers/adminController.js";
 
 const router = express.Router();
 
+
 router.use(auth, authRole(["admin"]));
+
+
+router.get("/stats/global", getGlobalStats);
+
 
 router.get("/recruteurs/en-attente", getPendingRecruiters);
 router.put("/recruteurs/valider/:id", validateRecruiter);
 router.put("/recruteurs/rejeter/:id", rejectRecruiter);
+
+
+router.get("/users", getAllUsers);
+router.put("/users/ban/:id", banUser);
+router.put("/users/unban/:id", unBanUser);
+router.post("/users/message/:id", sendMessageToUser);
+
+
+router.post("/create", createAdmin);
+router.delete("/:id", deleteAdmin);
+
+
+router.delete("/offres/:id", deleteOfferAdmin);
+
+router.get("/offres/manuelles", getManualSelectionOffers);
+
+router.post("/offres/proposer", proposeCandidateToOffer);
 
 export default router;
 

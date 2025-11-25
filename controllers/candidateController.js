@@ -11,14 +11,19 @@ import path from "path";
 export const updateProfile = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { telephone, wilaya } = req.body;
+    const { telephone, wilaya, autoriserProposition } = req.body;
 
     let candidate = await Candidate.findOne({ userId });
+
     if (!candidate) {
       candidate = new Candidate({ userId, telephone, wilaya });
     } else {
-      candidate.telephone = telephone;
-      candidate.wilaya = wilaya;
+      if (telephone) candidate.telephone = telephone;
+      if (wilaya) candidate.wilaya = wilaya;
+
+      if (autoriserProposition !== undefined) {
+        candidate.autoriserProposition = autoriserProposition;
+      }
     }
 
     await candidate.save();
@@ -230,6 +235,76 @@ export const updateAccount = async (req, res) => {
 
     await user.save();
     res.json({ msg: "Compte mis à jour ✅" });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+export const addToFavorites = async (req, res) => {
+  try {
+    const { offerId } = req.params;
+    const userId = req.user.id;
+
+    const candidate = await Candidate.findOne({ userId });
+    if (!candidate) return res.status(404).json({ msg: "Profil introuvable." });
+
+    // Check if offer exists
+    const offer = await Offer.findById(offerId);
+    if (!offer) return res.status(404).json({ msg: "Offre introuvable." });
+
+    // Add to favorites if not already there (addToSet avoids duplicates)
+    if (candidate.favoris.includes(offerId)) {
+      return res
+        .status(400)
+        .json({ msg: "Cette offre est déjà dans vos favoris." });
+    }
+
+    candidate.favoris.push(offerId);
+    await candidate.save();
+
+    res.json({
+      msg: "Offre ajoutée aux favoris ❤️",
+      favoris: candidate.favoris,
+    });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+export const removeFromFavorites = async (req, res) => {
+  try {
+    const { offerId } = req.params;
+    const userId = req.user.id;
+
+    const candidate = await Candidate.findOne({ userId });
+    if (!candidate) return res.status(404).json({ msg: "Profil introuvable." });
+
+    candidate.favoris = candidate.favoris.filter(
+      (id) => id.toString() !== offerId
+    );
+
+    await candidate.save();
+
+    res.json({
+      msg: "Offre retirée des favoris 💔",
+      favoris: candidate.favoris,
+    });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+export const getFavorites = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const candidate = await Candidate.findOne({ userId }).populate({
+      path: "favoris",
+      populate: { path: "recruteurId", select: "entrepriseNom" },
+    });
+
+    if (!candidate) return res.status(404).json({ msg: "Profil introuvable." });
+
+    res.json(candidate.favoris);
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }

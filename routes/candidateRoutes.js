@@ -11,6 +11,9 @@ import {
   getHistorique,
   updateAccount,
   getProfile,
+  addToFavorites,
+  removeFromFavorites,
+  getFavorites,
 } from "../controllers/candidateController.js";
 
 const router = express.Router();
@@ -36,5 +39,10 @@ router.put("/compte", updateAccount);
 
 // Voir son profil
 router.get("/profil", getProfile);
+
+// gestion des favoris
+router.get("/favorites", getFavorites);
+router.post("/favorites/:offerId", addToFavorites);
+router.delete("/favorites/:offerId", removeFromFavorites);
 
 export default router;

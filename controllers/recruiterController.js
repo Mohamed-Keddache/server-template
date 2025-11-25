@@ -28,10 +28,19 @@ export const createOffer = async (req, res) => {
       typeSelection,
     } = req.body;
 
+    let photoPath = "";
+    if (req.file) {
+      // Normaliser le chemin pour éviter les problèmes Windows/Linux
+      photoPath = req.file.path.replace(/\\/g, "/");
+    }
+
     const newOffer = new Offer({
       recruteurId: recruiter._id,
       titre,
       description,
+
+      photo: photoPath,
+
       domaine,
       niveau,
       experience,
@@ -40,10 +49,22 @@ export const createOffer = async (req, res) => {
       typeSelection,
     });
 
-    const savedOffer = await newOffer.save(); // Lier l'offre au profil du recruteur
+    const savedOffer = await newOffer.save();
 
     recruiter.offres.push(savedOffer._id);
     await recruiter.save();
+
+    if (typeSelection === "manuelle") {
+      const admins = await User.find({ role: "admin" });
+
+      for (const admin of admins) {
+        await Notification.create({
+          userId: admin._id,
+          message: `URGENT : Le recruteur ${recruiter.entrepriseNom} demande une sélection manuelle pour l'offre "${savedOffer.titre}".`,
+          type: "alerte",
+        });
+      }
+    }
 
     res
       .status(201)

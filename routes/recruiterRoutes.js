@@ -1,6 +1,7 @@
 import express from "express";
 import auth from "../middleware/auth.js";
 import { authRole } from "../middleware/roles.js";
+import { uploadImage } from "../config/multer.js";
 import {
   createOffer,
   getMyOffers,
@@ -20,7 +21,7 @@ router.use(auth, authRole(["recruteur"]));
 router.put("/profile", updateRecruiterProfile);
 
 // Gestion des offres (CRUD)
-router.post("/offers", createOffer);
+router.post("/offers", uploadImage.single("photo"), createOffer);
 router.get("/my-offers", getMyOffers);
 router.put("/offers/:id", updateOffer);
 router.put("/offers/:id/deactivate", deactivateOffer);

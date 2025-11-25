@@ -30,9 +30,10 @@ const offerSchema = new mongoose.Schema(
         cvUrl: { type: String },
         statut: {
           type: String,
-          enum: ["en attente", "accepté", "rejeté"],
+          enum: ["en attente", "accepté", "rejeté", "proposé"],
           default: "en attente",
         },
+        recommandeParAdmin: { type: Boolean, default: false },
         datePostulation: { type: Date, default: Date.now },
       },
     ],
