@@ -65,8 +65,8 @@ import adminRoutes from "./routes/adminRoutes.js";
 import offerRoutes from "./routes/offerRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
 import skillRoutes from "./routes/skillRoutes.js";
-import supportRoutes from "./routes/supportRoutes.js";
-import announcementRoutes from "./routes/announcementRoutes.js";
+import supportRoutes from "./routes/supportRoutes.js"; 
+import announcementRoutes from "./routes/announcementRoutes.js"; 
 
 dotenv.config();
 const app = express();
@@ -86,15 +86,15 @@ app.use(express.json());
 app.use(morgan("dev"));
 app.use("/uploads", express.static("uploads"));
 
+
+app.use("/api/skills", skillRoutes);
+app.use("/api/offers", offerRoutes);
+
 async function startServer() {
   try {
     await connectDB();
     setupFolders();
     await seedAdmin();
-
-    
-    app.use("/api/skills", skillRoutes);
-    app.use("/api/offers", offerRoutes);
 
     
     app.use("/api/auth", authRoutes);
@@ -246,226 +246,61 @@ import bcrypt from "bcryptjs";
 import SupportTicket from "../models/SupportTicket.js";
 import AdminLog, { logAdminAction } from "../models/AdminLog.js";
 
-export const getRecruiters = async (req, res) => {
+
+
+
+export const getPendingRecruiters = async (req, res) => {
   try {
-    const {
-      status, 
-      page = 1,
-      limit = 20,
-      search,
-    } = req.query;
+    const pendingUsers = await User.find({
+      role: "recruteur",
+      statutValidation: "en attente",
+      emailVerified: true,
+    })
+      .select("-motDePasse")
+      .sort({ createdAt: -1 });
 
-    let query = {};
+    const enriched = await Promise.all(
+      pendingUsers.map(async (u) => {
+        
+        const rec = await Recruiter.findOne({ userId: u._id }).populate(
+          "companyId"
+        );
 
-    
-    if (status === "pending") {
-      query.status = { $in: ["pending_validation", "pending_revalidation"] };
-    } else if (status === "requests_sent") {
-      query.status = {
-        $in: [
-          "pending_info",
-          "pending_documents",
-          "pending_info_and_documents",
-        ],
-      };
-    } else if (status === "decision_made") {
-      query.status = { $in: ["validated", "rejected"] };
-    } else if (status) {
-      
-      query.status = status;
-    }
-
-    
-    if (search) {
-      const users = await User.find({
-        $or: [
-          { nom: { $regex: search, $options: "i" } },
-          { email: { $regex: search, $options: "i" } },
-        ],
-      }).select("_id");
-
-      const userIds = users.map((u) => u._id);
-
-      
-      const companies = await Company.find({
-        name: { $regex: search, $options: "i" },
-      }).select("_id");
-      const companyIds = companies.map((c) => c._id);
-
-      query.$or = [
-        { userId: { $in: userIds } },
-        { companyId: { $in: companyIds } },
-      ];
-    }
-
-    const skip = (page - 1) * limit;
-
-    const recruiters = await Recruiter.find(query)
-      .populate({
-        path: "userId",
-        select: "nom email createdAt",
+        return {
+          ...u.toObject(),
+          entreprise: rec?.companyId?.name || "Inconnue",
+          entrepriseStatus: rec?.companyId?.status, 
+          position: rec?.position,
+        };
       })
-      .populate("companyId", "name status logo")
-      .sort({ createdAt: -1 }) 
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    const total = await Recruiter.countDocuments(query);
-
-    
-    const enriched = recruiters
-      .filter((r) => r.userId !== null)
-      .map((r) => ({
-        _id: r._id,
-        userId: r.userId._id,
-        nom: r.userId.nom,
-        email: r.userId.email,
-        createdAt: r.userId.createdAt, 
-
-        
-        entrepriseId: r.companyId?._id,
-        entreprise: r.companyId?.name || "Inconnue",
-        entrepriseStatus: r.companyId?.status,
-        entrepriseLogo: r.companyId?.logo,
-        entrepriseDetails: r.companyId,
-
-        position: r.position,
-        telephone: r.telephone || "Non renseigné", 
-        recruiterStatus: r.status,
-        isAdmin: r.isAdmin,
-        rejectionReason: r.rejectionReason,
-
-        
-        validationRequests: r.validationRequests,
-
-        
-        lastRequestDate:
-          r.validationRequests.length > 0
-            ? r.validationRequests[r.validationRequests.length - 1].createdAt
-            : null,
-      }));
-
-    res.json({
-      data: enriched,
-      meta: {
-        total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(total / limit),
-      },
-    });
-  } catch (err) {
-    res.status(500).json({ msg: err.message });
-  }
-};
-
-
-export const cancelValidationRequest = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const recruiter = await Recruiter.findById(id);
-    if (!recruiter) {
-      return res.status(404).json({ msg: "Recruteur introuvable" });
-    }
-
-    
-    recruiter.status = "pending_validation";
-
-    
-    
-    recruiter.validationRequests = recruiter.validationRequests.filter(
-      (req) => req.status !== "pending"
     );
 
-    await recruiter.save();
-
-    await logAdminAction(
-      req.user.id,
-      "recruiter_request_canceled",
-      { type: "recruiter", id: recruiter._id },
-      {},
-      req
-    );
-
-    res.json({ msg: "Demande annulée, recruteur replacé en attente ✅" });
+    res.json(enriched);
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }
 };
-
-
-export const getCompanyDetailsAdmin = async (req, res) => {
-  try {
-    const { companyId } = req.params;
-    const company = await Company.findById(companyId);
-
-    if (!company)
-      return res.status(404).json({ msg: "Entreprise introuvable" });
-
-    
-    const recruiterCount = await Recruiter.countDocuments({ companyId });
-    const offerCount = await Offer.countDocuments({ companyId });
-
-    res.json({
-      ...company.toObject(),
-      stats: {
-        recruiters: recruiterCount,
-        offers: offerCount,
-      },
-    });
-  } catch (err) {
-    res.status(500).json({ msg: err.message });
-  }
-};
-
 
 export const validateRecruiter = async (req, res) => {
   try {
     const { id } = req.params;
 
-    
-    let recruiter = await Recruiter.findById(id).populate("companyId");
-    if (!recruiter) {
-      recruiter = await Recruiter.findOne({ userId: id }).populate("companyId");
-    }
-
-    if (!recruiter) {
+    const user = await User.findById(id);
+    if (!user || user.role !== "recruteur") {
       return res.status(404).json({ msg: "Recruteur introuvable" });
     }
 
-    const user = await User.findById(recruiter.userId);
-    if (!user) {
-      return res.status(404).json({ msg: "Utilisateur introuvable" });
+    const recruiter = await Recruiter.findOne({ userId: id });
+    if (!recruiter) {
+      return res.status(404).json({ msg: "Profil recruteur introuvable" });
     }
 
     
+    user.statutValidation = "validé";
     recruiter.status = "validated";
 
-    
-    const existingAdmins = await Recruiter.countDocuments({
-      companyId: recruiter.companyId._id,
-      status: "validated",
-      isAdmin: true,
-    });
+    await Promise.all([user.save(), recruiter.save()]);
 
-    
-    if (existingAdmins === 0 && recruiter.companyId.status === "active") {
-      recruiter.isAdmin = true;
-      recruiter.permissions.editCompany = true;
-      recruiter.permissions.manageTeam = true;
-
-      
-      await Notification.create({
-        userId: user._id,
-        message: `Félicitations ! Vous êtes le premier recruteur validé de "${recruiter.companyId.name}" et devenez automatiquement administrateur de l'entreprise.`,
-        type: "validation",
-      });
-    }
-
-    await recruiter.save();
-
-    
     await Notification.create({
       userId: user._id,
       message:
@@ -477,14 +312,11 @@ export const validateRecruiter = async (req, res) => {
       req.user.id,
       "recruiter_validated",
       { type: "recruiter", id: recruiter._id },
-      { isFirstAdmin: recruiter.isAdmin },
+      {},
       req
     );
 
-    res.json({
-      msg: "Recruteur validé avec succès ✅",
-      isCompanyAdmin: recruiter.isAdmin,
-    });
+    res.json({ msg: "Recruteur validé avec succès ✅" });
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }
@@ -496,22 +328,25 @@ export const rejectRecruiter = async (req, res) => {
     const { id } = req.params;
     const { message } = req.body;
 
-    let recruiter = await Recruiter.findById(id);
-    if (!recruiter) {
-      recruiter = await Recruiter.findOne({ userId: id });
-    }
-
-    if (!recruiter) {
+    const user = await User.findById(id);
+    if (!user || user.role !== "recruteur") {
       return res.status(404).json({ msg: "Recruteur introuvable" });
     }
 
+    const recruiter = await Recruiter.findOne({ userId: id });
+
     
-    recruiter.status = "rejected";
-    recruiter.rejectionReason = message || "Non spécifiée";
-    await recruiter.save();
+    user.statutValidation = "rejeté";
+    if (recruiter) {
+      recruiter.status = "rejected";
+      recruiter.rejectionReason = message || "Non spécifiée";
+      await recruiter.save();
+    }
+
+    await user.save();
 
     await Notification.create({
-      userId: recruiter.userId,
+      userId: user._id,
       message: `Votre compte recruteur a été rejeté. Raison : ${
         message || "Non spécifiée"
       }`,
@@ -521,7 +356,7 @@ export const rejectRecruiter = async (req, res) => {
     await logAdminAction(
       req.user.id,
       "recruiter_rejected",
-      { type: "recruiter", id: recruiter._id },
+      { type: "recruiter", id: recruiter?._id },
       { reason: message },
       req
     );
@@ -607,6 +442,9 @@ export const validateCompany = async (req, res) => {
 
     if (!company)
       return res.status(404).json({ msg: "Entreprise introuvable" });
+
+    
+    
 
     res.json({ msg: "Entreprise validée avec succès ✅", company });
   } catch (err) {
@@ -697,9 +535,7 @@ export const banUser = async (req, res) => {
     if (user.role === "admin")
       return res.status(403).json({ msg: "Impossible de bannir un admin." });
 
-    
-    user.accountStatus = "banned";
-    user.suspensionReason = raison || "Non respect des conditions.";
+    user.statutValidation = "rejeté";
     await user.save();
 
     await Notification.create({
@@ -709,14 +545,6 @@ export const banUser = async (req, res) => {
       }`,
       type: "alerte",
     });
-
-    await logAdminAction(
-      req.user.id,
-      "user_banned",
-      { type: "user", id: user._id },
-      { reason: raison },
-      req
-    );
 
     res.json({ msg: `Utilisateur ${user.nom} a été banni ⛔` });
   } catch (err) {
@@ -731,34 +559,26 @@ export const unBanUser = async (req, res) => {
     const user = await User.findById(id);
     if (!user) return res.status(404).json({ msg: "Utilisateur introuvable" });
 
+    
     if (user.role === "admin") {
       return res.status(400).json({ msg: "Action inutile sur un admin." });
     }
 
-    
-    if (user.accountStatus === "active") {
+    if (user.statutValidation === "validé") {
       return res.status(400).json({ msg: "Cet utilisateur n'est pas banni." });
     }
 
-    user.accountStatus = "active";
-    user.suspensionReason = undefined;
-    user.suspendedUntil = undefined;
+    
+    user.statutValidation = "validé";
     await user.save();
 
+    
     await Notification.create({
       userId: user._id,
       message:
         "Bonne nouvelle ! Votre compte a été réactivé par l'administration. Vous pouvez à nouveau vous connecter.",
-      type: "info",
+      type: "info", 
     });
-
-    await logAdminAction(
-      req.user.id,
-      "user_unbanned",
-      { type: "user", id: user._id },
-      {},
-      req
-    );
 
     res.json({ msg: `L'utilisateur ${user.nom} a été débanni et réactivé ✅` });
   } catch (err) {
@@ -767,138 +587,60 @@ export const unBanUser = async (req, res) => {
 };
 
 
+
 export const getAllUsers = async (req, res) => {
   try {
-    const {
-      role,
-      status,
-      search,
-      wilaya,
-      proposable,
-      emailVerified,
-      page = 1,
-      limit = 20,
-    } = req.query;
-
-    
+    const { role, wilaya, proposable } = req.query;
     let query = {};
     if (role) query.role = role;
-    if (status) query.accountStatus = status;
-    if (emailVerified) query.emailVerified = emailVerified === "true";
 
-    if (search) {
-      query.$or = [
-        { nom: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-      ];
-    }
+    let users = await User.find(query)
+      .select("-motDePasse")
+      .sort({ createdAt: -1 });
 
-    const skip = (page - 1) * limit;
+    const enriched = await Promise.all(
+      users.map(async (u) => {
+        let details = {};
 
-    
-    const [users, total] = await Promise.all([
-      User.find(query)
-        .select("-motDePasse")
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(parseInt(limit))
-        .lean(),
-      User.countDocuments(query),
-    ]);
+        if (u.role === "candidat") {
+          const cand = await Candidate.findOne({ userId: u._id });
+          if (cand)
+            details = {
+              wilaya: cand.residence?.wilaya || "N/A", 
+              telephone: cand.telephone,
+              autoriserProposition: cand.autoriserProposition,
+            };
+        } else if (u.role === "recruteur") {
+          const rec = await Recruiter.findOne({ userId: u._id }).populate(
+            "companyId"
+          );
+          
+          const offerCount = await Offer.countDocuments({
+            recruteurId: rec?._id,
+          });
 
-    const userIds = users.map((u) => u._id);
-
-    
-    const [candidates, recruiters] = await Promise.all([
-      Candidate.find({ userId: { $in: userIds } })
-        .select(
-          "userId telephone residence autoriserProposition desiredPosition"
-        )
-        .lean(),
-      Recruiter.find({ userId: { $in: userIds } })
-        .populate("companyId", "name")
-        .select("userId status companyId")
-        .lean(),
-    ]);
-
-    const candidateMap = new Map(
-      candidates.map((c) => [c.userId.toString(), c])
-    );
-    const recruiterMap = new Map(
-      recruiters.map((r) => [r.userId.toString(), r])
-    );
-
-    
-    const recruiterIds = recruiters.map((r) => r._id);
-    const offerCounts = await Offer.aggregate([
-      { $match: { recruteurId: { $in: recruiterIds } } },
-      { $group: { _id: "$recruteurId", count: { $sum: 1 } } },
-    ]);
-
-    const offerCountMap = new Map(
-      offerCounts.map((o) => [o._id.toString(), o.count])
-    );
-
-    
-    let enriched = users.map((u) => {
-      const userId = u._id.toString();
-      let details = {};
-
-      if (u.role === "candidat") {
-        const cand = candidateMap.get(userId);
-        if (cand) {
-          details = {
-            telephone: cand.telephone,
-            wilaya: cand.residence?.wilaya || null,
-            autoriserProposition: cand.autoriserProposition,
-            poste: cand.desiredPosition,
-          };
+          if (rec)
+            details = {
+              entreprise: rec.companyId?.name || "Inconnue", 
+              offres: offerCount,
+            };
         }
-      }
-
-      if (u.role === "recruteur") {
-        const rec = recruiterMap.get(userId);
-        if (rec) {
-          details = {
-            entreprise: rec.companyId?.name || "Inconnue",
-            recruiterStatus: rec.status,
-            offres: offerCountMap.get(rec._id.toString()) || 0,
-          };
-        }
-      }
-
-      return {
-        ...u,
-        accountStatus: u.accountStatus,
-        details,
-      };
-    });
+        return { ...u.toObject(), ...details };
+      })
+    );
 
     
+    let finalUsers = enriched;
     if (wilaya) {
-      enriched = enriched.filter(
-        (u) =>
-          u.details?.wilaya &&
-          u.details.wilaya.toLowerCase() === wilaya.toLowerCase()
+      finalUsers = finalUsers.filter(
+        (u) => u.wilaya && u.wilaya.toLowerCase() === wilaya.toLowerCase()
       );
     }
-
     if (proposable === "true") {
-      enriched = enriched.filter(
-        (u) => u.details?.autoriserProposition === true
-      );
+      finalUsers = finalUsers.filter((u) => u.autoriserProposition === true);
     }
 
-    
-    res.json({
-      data: enriched,
-      meta: {
-        total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(total / limit),
-      },
-    });
+    res.json(finalUsers);
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }
@@ -957,11 +699,14 @@ export const deleteOfferAdmin = async (req, res) => {
 };
 
 
+
 export const getGlobalStats = async (req, res) => {
   try {
     const now = new Date();
     const fifteenMinutesAgo = new Date(now - 15 * 60 * 1000);
+    const twentyFourHoursAgo = new Date(now - 24 * 60 * 60 * 1000);
     const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
+    const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
 
     const [
       onlineUsers,
@@ -978,25 +723,39 @@ export const getGlobalStats = async (req, res) => {
       openTickets,
       recentAdminActions,
     ] = await Promise.all([
+      
       User.countDocuments({ derniereConnexion: { $gt: fifteenMinutesAgo } }),
+      
       User.countDocuments(),
+      
       User.countDocuments({ createdAt: { $gte: thirtyDaysAgo } }),
+      
       User.aggregate([{ $group: { _id: "$role", count: { $sum: 1 } } }]),
+      
       Offer.countDocuments(),
+      
       Offer.countDocuments({ actif: true, validationStatus: "approved" }),
+      
       Offer.countDocuments({ validationStatus: "pending" }),
+      
       Offer.countDocuments({ createdAt: { $gte: thirtyDaysAgo } }),
+      
       Application.aggregate([
         { $group: { _id: "$status", count: { $sum: 1 } } },
       ]),
       
-      Recruiter.countDocuments({
-        status: { $in: ["pending_validation", "pending_revalidation"] },
+      User.countDocuments({
+        role: "recruteur",
+        statutValidation: "en attente",
+        emailVerified: true,
       }),
+      
       Company.countDocuments({ status: "pending" }),
+      
       SupportTicket.countDocuments({
         status: { $in: ["open", "in_progress"] },
       }),
+      
       AdminLog.find()
         .populate("adminId", "nom")
         .sort({ createdAt: -1 })
@@ -1013,12 +772,13 @@ export const getGlobalStats = async (req, res) => {
       statsCandidatures[s._id] = s.count;
     });
 
+    
     const pendingTasks = {
       recruiters: pendingRecruiters,
-      companies: 0, 
+      companies: pendingCompanies,
       offers: pendingOffers,
       tickets: openTickets,
-      total: pendingRecruiters + pendingOffers + openTickets,
+      total: pendingRecruiters + pendingCompanies + pendingOffers + openTickets,
     };
 
     res.json({
@@ -1111,109 +871,15 @@ export const getTrends = async (req, res) => {
 
 export const getManualSelectionOffers = async (req, res) => {
   try {
-    const {
-      minProposals,
-      maxProposals,
-      startDate,
-      endDate,
-      sortBy = "datePublication", 
-    } = req.query;
-
-    
-    const pipeline = [
-      {
-        $match: {
-          actif: true,
-          candidateSearchMode: "manual", 
-          validationStatus: "approved",
-        },
-      },
-    ];
-
-    
-    if (startDate || endDate) {
-      const dateFilter = {};
-      if (startDate) dateFilter.$gte = new Date(startDate);
-      if (endDate) dateFilter.$lte = new Date(endDate);
-      pipeline[0].$match.datePublication = dateFilter;
-    }
-
-    
-    pipeline.push({
-      $lookup: {
-        from: "applications",
-        let: { offerId: "$_id" },
-        pipeline: [
-          {
-            $match: {
-              $expr: {
-                $and: [
-                  { $eq: ["$offerId", "$$offerId"] },
-                  { $eq: ["$recommandeParAdmin", true] }, 
-                ],
-              },
-            },
-          },
-          { $count: "count" },
-        ],
-        as: "adminProposals",
-      },
-    });
-
-    
-    pipeline.push({
-      $addFields: {
-        proposalCount: {
-          $ifNull: [{ $arrayElemAt: ["$adminProposals.count", 0] }, 0],
-        },
-      },
-    });
-
-    
-    if (minProposals !== undefined || maxProposals !== undefined) {
-      const countMatch = {};
-      if (minProposals !== undefined) countMatch.$gte = parseInt(minProposals);
-      if (maxProposals !== undefined) countMatch.$lte = parseInt(maxProposals);
-      pipeline.push({ $match: { proposalCount: countMatch } });
-    }
-
-    
-    pipeline.push(
-      {
-        $lookup: {
-          from: "recruiters",
-          localField: "recruteurId",
-          foreignField: "_id",
-          as: "recruteur",
-        },
-      },
-      { $unwind: "$recruteur" },
-      {
-        $lookup: {
-          from: "companies",
-          localField: "companyId",
-          foreignField: "_id",
-          as: "company",
-        },
-      },
-      { $unwind: "$company" }
-    );
-
-    
-    let sortStage = {};
-    if (sortBy === "lastModified") {
-      sortStage = { updatedAt: -1 };
-    } else {
-      sortStage = { datePublication: -1 };
-    }
-    pipeline.push({ $sort: sortStage });
-
-    
-    const offers = await Offer.aggregate(pipeline);
+    const offers = await Offer.find({
+      actif: true,
+      typeSelection: "manuelle",
+    })
+      .populate("recruteurId", "entrepriseNom email")
+      .sort({ datePublication: -1 });
 
     res.json(offers);
   } catch (err) {
-    console.error("Erreur Manual Matching:", err);
     res.status(500).json({ msg: err.message });
   }
 };
@@ -1284,7 +950,7 @@ export const proposeCandidateToOffer = async (req, res) => {
 
     res.json({ msg: "Candidat proposé avec succès ✅" });
   } catch (err) {
-    console.error(err);
+    console.error(err); 
     res.status(500).json({ msg: err.message });
   }
 };
@@ -1455,7 +1121,6 @@ export const requestRecruiterDocuments = async (req, res) => {
       return res.status(404).json({ msg: "Recruteur introuvable." });
     }
 
-    
     recruiter.status =
       type === "document" ? "pending_documents" : "pending_info";
     recruiter.validationRequests.push({
@@ -1463,7 +1128,6 @@ export const requestRecruiterDocuments = async (req, res) => {
       message,
       requiredDocuments,
       requiredFields,
-      status: "pending",
     });
     await recruiter.save();
 
@@ -1487,6 +1151,48 @@ export const requestRecruiterDocuments = async (req, res) => {
   }
 };
 
+
+export const submitValidationResponse = async (req, res) => {
+  try {
+    const recruiter = await getRecruiterProfile(req.user.id);
+    const { requestId, text } = req.body;
+    const documents = req.files?.map((f) => f.path.replace(/\\/g, "/")) || [];
+
+    const request = recruiter.validationRequests.id(requestId);
+    if (!request || request.status !== "pending") {
+      return res
+        .status(404)
+        .json({ msg: "Demande introuvable ou déjà traitée." });
+    }
+
+    request.response = {
+      text,
+      documents,
+      submittedAt: new Date(),
+    };
+    request.status = "submitted";
+    recruiter.status = "pending_revalidation";
+    await recruiter.save();
+
+    
+    const admins = await Admin.find({
+      "permissions.validateRecruiters": true,
+      status: "active",
+    }).populate("userId", "_id");
+
+    for (const admin of admins) {
+      await Notification.create({
+        userId: admin.userId._id,
+        message: `Le recruteur ${recruiter.userId.nom} a répondu à une demande de validation.`,
+        type: "info",
+      });
+    }
+
+    res.json({ msg: "Réponse soumise. Vous serez notifié du résultat." });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
 export const updateAdminPermissions = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1561,425 +1267,6 @@ export const updateAdminLabel = async (req, res) => {
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }
-};
-
-
-export const createCompanyByAdmin = async (req, res) => {
-  try {
-    const { name, website, description, industry, location, size, logo } =
-      req.body;
-
-    if (!name) {
-      return res
-        .status(400)
-        .json({ msg: "Le nom de l'entreprise est obligatoire." });
-    }
-
-    
-    const existingCompany = await Company.findOne({
-      name: { $regex: new RegExp(`^${name}$`, "i") },
-    });
-
-    if (existingCompany) {
-      return res
-        .status(400)
-        .json({ msg: "Une entreprise avec ce nom existe déjà." });
-    }
-
-    
-    const company = await Company.create({
-      name,
-      website,
-      description,
-      industry,
-      location,
-      size,
-      logo,
-      status: "active", 
-    });
-
-    await logAdminAction(
-      req.user.id,
-      "company_created_by_admin",
-      { type: "company", id: company._id },
-      { name },
-      req
-    );
-
-    res.status(201).json({
-      msg: "Entreprise créée avec succès ✅",
-      company,
-    });
-  } catch (err) {
-    res.status(500).json({ msg: err.message });
-  }
-};
-
-
-export const getCompanyRecruiters = async (req, res) => {
-  try {
-    const { companyId } = req.params;
-
-    const company = await Company.findById(companyId);
-    if (!company) {
-      return res.status(404).json({ msg: "Entreprise introuvable." });
-    }
-
-    const recruiters = await Recruiter.find({ companyId })
-      .populate("userId", "nom email createdAt")
-      .sort({ isAdmin: -1, createdAt: 1 }); 
-
-    res.json({
-      company: {
-        _id: company._id,
-        name: company.name,
-        status: company.status,
-      },
-      recruiters,
-    });
-  } catch (err) {
-    res.status(500).json({ msg: err.message });
-  }
-};
-
-
-export const assignCompanyAdmin = async (req, res) => {
-  try {
-    const { companyId, recruiterId } = req.body;
-
-    const company = await Company.findById(companyId);
-    if (!company) {
-      return res.status(404).json({ msg: "Entreprise introuvable." });
-    }
-
-    const recruiter = await Recruiter.findById(recruiterId).populate("userId");
-    if (!recruiter) {
-      return res.status(404).json({ msg: "Recruteur introuvable." });
-    }
-
-    
-    if (recruiter.companyId.toString() !== companyId) {
-      return res.status(400).json({
-        msg: "Ce recruteur n'appartient pas à cette entreprise.",
-      });
-    }
-
-    
-    if (recruiter.status !== "validated") {
-      return res.status(400).json({
-        msg: "Le recruteur doit être validé avant de devenir administrateur.",
-      });
-    }
-
-    
-    recruiter.isAdmin = true;
-    recruiter.permissions.editCompany = true;
-    recruiter.permissions.manageTeam = true;
-    await recruiter.save();
-
-    
-    await Notification.create({
-      userId: recruiter.userId._id,
-      message: `Vous êtes maintenant administrateur de l'entreprise "${company.name}".`,
-      type: "validation",
-    });
-
-    await logAdminAction(
-      req.user.id,
-      "company_admin_assigned",
-      { type: "recruiter", id: recruiter._id },
-      { companyId, companyName: company.name },
-      req
-    );
-
-    res.json({
-      msg: `${recruiter.userId.nom} est maintenant administrateur de ${company.name} ✅`,
-      recruiter,
-    });
-  } catch (err) {
-    res.status(500).json({ msg: err.message });
-  }
-};
-
-
-export const removeCompanyAdmin = async (req, res) => {
-  try {
-    const { recruiterId } = req.params;
-
-    const recruiter = await Recruiter.findById(recruiterId)
-      .populate("userId")
-      .populate("companyId");
-
-    if (!recruiter) {
-      return res.status(404).json({ msg: "Recruteur introuvable." });
-    }
-
-    if (!recruiter.isAdmin) {
-      return res.status(400).json({
-        msg: "Ce recruteur n'est pas administrateur d'entreprise.",
-      });
-    }
-
-    
-    recruiter.isAdmin = false;
-    recruiter.permissions.editCompany = false;
-    recruiter.permissions.manageTeam = false;
-    await recruiter.save();
-
-    
-    await Notification.create({
-      userId: recruiter.userId._id,
-      message: `Vous n'êtes plus administrateur de l'entreprise "${recruiter.companyId.name}".`,
-      type: "info",
-    });
-
-    await logAdminAction(
-      req.user.id,
-      "company_admin_removed",
-      { type: "recruiter", id: recruiter._id },
-      {
-        companyId: recruiter.companyId._id,
-        companyName: recruiter.companyId.name,
-      },
-      req
-    );
-
-    res.json({
-      msg: `${recruiter.userId.nom} n'est plus administrateur ⚠️`,
-      recruiter,
-    });
-  } catch (err) {
-    res.status(500).json({ msg: err.message });
-  }
-};
-
-
-export const updateCompanyByAdmin = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { name, website, description, industry, location, size, logo } =
-      req.body;
-
-    const company = await Company.findByIdAndUpdate(
-      id,
-      { name, website, description, industry, location, size, logo },
-      { new: true }
-    );
-
-    if (!company) {
-      return res.status(404).json({ msg: "Entreprise introuvable." });
-    }
-
-    await logAdminAction(
-      req.user.id,
-      "company_updated_by_admin",
-      { type: "company", id: company._id },
-      { updates: req.body },
-      req
-    );
-
-    res.json({ msg: "Entreprise mise à jour ✅", company });
-  } catch (err) {
-    res.status(500).json({ msg: err.message });
-  }
-};
-
-
-
-export const requestMultipleValidationItems = async (req, res) => {
-  try {
-    const { recruiterId } = req.params;
-    const { requests } = req.body;
-
-    const recruiter = await Recruiter.findById(recruiterId).populate("userId");
-    if (!recruiter) {
-      return res.status(404).json({ msg: "Recruteur introuvable." });
-    }
-
-    
-    requests.forEach((request) => {
-      recruiter.validationRequests.push({
-        type: request.type,
-        message: request.message,
-        requiredDocuments: request.requiredDocuments || 0,
-        requiredFields: request.requiredFields || [],
-        status: "pending",
-      });
-    });
-
-    
-    const hasDocRequest = requests.some((r) => r.type === "document");
-    const hasInfoRequest = requests.some((r) => r.type === "information");
-
-    if (hasDocRequest && hasInfoRequest) {
-      recruiter.status = "pending_info_and_documents"; 
-    } else if (hasDocRequest) {
-      recruiter.status = "pending_documents"; 
-    } else if (hasInfoRequest) {
-      recruiter.status = "pending_info"; 
-    } else {
-      
-      return res.status(400).json({ msg: "Aucune demande valide reçue." });
-    }
-    
-
-    await recruiter.save();
-
-    await Notification.create({
-      userId: recruiter.userId._id,
-      message: `Action requise : Des informations ou documents vous sont demandés.`,
-      type: "alerte",
-    });
-
-    await logAdminAction(
-      req.user.id,
-      "recruiter_multiple_requests",
-      { type: "recruiter", id: recruiter._id },
-      { requestCount: requests.length, newStatus: recruiter.status },
-      req
-    );
-
-    res.json({
-      msg: `Demandes envoyées. Statut mis à jour vers : ${recruiter.status} ✅`,
-    });
-  } catch (err) {
-    res.status(500).json({ msg: err.message });
-  }
-};
-
-
-export const getAllCompanies = async (req, res) => {
-  try {
-    const { page = 1, limit = 20, search, status } = req.query;
-
-    let query = {};
-
-    
-    if (status) {
-      query.status = status;
-    }
-
-    
-    if (search) {
-      query.$or = [
-        { name: { $regex: search, $options: "i" } }, 
-        { industry: { $regex: search, $options: "i" } },
-      ];
-    }
-
-    const skip = (page - 1) * limit;
-
-    const companies = await Company.find(query)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    const total = await Company.countDocuments(query);
-
-    
-    const enrichedCompanies = await Promise.all(
-      companies.map(async (company) => {
-        const recruitersCount = await Recruiter.countDocuments({
-          companyId: company._id,
-        });
-        return {
-          ...company.toObject(),
-          recruitersCount,
-        };
-      })
-    );
-
-    res.json({
-      data: enrichedCompanies,
-      meta: {
-        total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages: Math.ceil(total / limit),
-      },
-    });
-  } catch (err) {
-    res.status(500).json({ msg: err.message });
-  }
-};
-export const getOfferDetailsAdmin = async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    const offer = await Offer.findById(id)
-      .populate("companyId", "name logo status website location")
-      .populate({
-        path: "recruteurId",
-        select: "userId position status telephone",
-        populate: { path: "userId", select: "nom email" },
-      });
-
-    if (!offer) return res.status(404).json({ msg: "Offre introuvable." });
-
-    res.json(offer);
-  } catch (err) {
-    res.status(500).json({ msg: err.message });
-  }
-};
-export const updateOfferByAdmin = async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    const offer = await Offer.findByIdAndUpdate(
-      id,
-      { $set: req.body },
-      { new: true }
-    );
-
-    if (!offer) return res.status(404).json({ msg: "Offre introuvable" });
-
-    
-    await logAdminAction(
-      req.user.id,
-      "offer_updated_by_admin",
-      { type: "offer", id: offer._id },
-      { updates: req.body },
-      req
-    );
-
-    res.json({ msg: "Offre modifiée par l'admin ✅", offer });
-  } catch (err) {
-    res.status(500).json({ msg: err.message });
-  }
-};
-export const toggleOfferVisibility = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { actif } = req.body; 
-
-    const offer = await Offer.findByIdAndUpdate(
-      id,
-      { actif: actif },
-      { new: true }
-    );
-
-    if (!offer) return res.status(404).json({ msg: "Offre introuvable" });
-
-    await logAdminAction(
-      req.user.id,
-      actif ? "offer_activated_admin" : "offer_deactivated_admin",
-      { type: "offer", id: offer._id },
-      {},
-      req
-    );
-
-    res.json({
-      msg: `Offre ${actif ? "activée" : "désactivée"} avec succès`,
-      offer,
-    });
-  } catch (err) {
-    res.status(500).json({ msg: err.message });
-  }
-};
-
-export const getCandidateDetailsAdmin = async (req, res) => {
-  const candidate = await Candidate.findById(req.params.id).populate("userId");
-  res.json(candidate);
 };
 
 
@@ -2410,8 +1697,10 @@ const generateToken = (user) => {
   );
 };
 
+
 export const register = async (req, res) => {
   try {
+    
     const {
       nom,
       email,
@@ -2419,13 +1708,15 @@ export const register = async (req, res) => {
       role,
       companyId,
       nouveauNomEntreprise,
-      nouveauSiteWeb,
+      nouveauSiteWeb, 
+      registreCommerce, 
     } = req.body;
 
     const exist = await User.findOne({ email });
     if (exist) return res.status(400).json({ msg: "Email déjà utilisé" });
 
     const hash = await bcrypt.hash(motDePasse, 10);
+    const statutValidation = role === "recruteur" ? "en attente" : "validé";
 
     
     const user = await User.create({
@@ -2433,28 +1724,29 @@ export const register = async (req, res) => {
       email,
       motDePasse: hash,
       role,
+      statutValidation,
       emailVerified: false,
-      accountStatus: "active",
     });
 
+    
     if (role === "recruteur") {
       let finalCompanyId;
 
       if (companyId) {
+        
         const comp = await Company.findById(companyId);
-        if (!comp) {
-          await User.findByIdAndDelete(user._id);
-          return res.status(400).json({ msg: "Entreprise introuvable" });
-        }
+        if (!comp) throw new Error("Entreprise introuvable");
         finalCompanyId = comp._id;
       } else if (nouveauNomEntreprise) {
+        
         const newComp = await Company.create({
           name: nouveauNomEntreprise,
           website: nouveauSiteWeb,
-          status: "pending",
+          status: "pending", 
         });
         finalCompanyId = newComp._id;
       } else {
+        
         await User.findByIdAndDelete(user._id);
         return res
           .status(400)
@@ -2465,20 +1757,27 @@ export const register = async (req, res) => {
       await Recruiter.create({
         userId: user._id,
         companyId: finalCompanyId,
-        position: "Recruteur",
-        status: "pending_validation",
-        isAdmin: !companyId,
+        position: "Recruteur (En attente)", 
+        isAdmin: !companyId, 
       });
     } else if (role === "candidat") {
       await Candidate.create({ userId: user._id });
     }
 
     const token = generateToken(user);
-    res.status(201).json({ msg: "Inscription réussie", token, user });
+    res.status(201).json({ msg: "Inscription réussie...", token, user });
   } catch (err) {
+    if (
+      err.name === "ValidationError" &&
+      typeof user !== "undefined" &&
+      user?._id
+    ) {
+      await User.findByIdAndDelete(user._id);
+    }
     res.status(500).json({ msg: err.message });
   }
 };
+
 
 export const login = async (req, res) => {
   try {
@@ -2495,72 +1794,34 @@ export const login = async (req, res) => {
     }
 
     
-    if (!user.canLogin()) {
-      if (user.accountStatus === "banned") {
-        return res.status(403).json({
-          msg: "Votre compte a été banni. Veuillez contacter l'administrateur.",
-          code: "ACCOUNT_BANNED",
-        });
-      }
-      if (user.accountStatus === "suspended") {
-        return res.status(403).json({
-          msg: `Votre compte est suspendu${
-            user.suspendedUntil
-              ? ` jusqu'au ${user.suspendedUntil.toLocaleDateString()}`
-              : ""
-          }.`,
-          code: "ACCOUNT_SUSPENDED",
-          reason: user.suspensionReason,
-        });
-      }
+    if (user.statutValidation === "rejeté") {
+      return res.status(403).json({
+        msg: "Votre compte a été suspendu. Veuillez contacter l'administrateur.",
+      });
     }
 
     
-    if (user.role === "recruteur") {
-      
-      if (!user.emailVerified) {
-        return res.status(403).json({
-          msg: "Veuillez confirmer votre email avant de vous connecter.",
-          code: "EMAIL_NOT_VERIFIED",
-          needEmailVerification: true,
-        });
-      }
+    if (user.role === "recruteur" && !user.emailVerified) {
+      return res.status(403).json({
+        msg: "Veuillez confirmer votre email avant de vous connecter.",
+        needEmailVerification: true,
+      });
+    }
 
-      
-      const recruiter = await Recruiter.findOne({ userId: user._id });
-      if (recruiter) {
-        if (recruiter.status === "rejected") {
-          return res.status(403).json({
-            msg: "Votre compte recruteur a été refusé.",
-            code: "RECRUITER_REJECTED",
-            reason: recruiter.rejectionReason,
-          });
-        }
-
-        if (recruiter.status !== "validated") {
-          
-          const token = generateToken(user);
-          user.derniereConnexion = new Date();
-          await user.save();
-
-          return res.json({
-            msg: "Connexion réussie (accès limité)",
-            token,
-            user: {
-              id: user._id,
-              email: user.email,
-              role: user.role,
-              emailVerified: user.emailVerified,
-            },
-            recruiterStatus: recruiter.status,
-            limitedAccess: true,
-            statusMessage: getRecruiterStatusMessage(recruiter.status),
-          });
-        }
-      }
+    
+    if (
+      user.role === "recruteur" &&
+      user.emailVerified &&
+      user.statutValidation === "en attente"
+    ) {
+      return res.status(403).json({
+        msg: "Votre compte est en attente de validation par un administrateur.",
+        waitingForAdmin: true,
+      });
     }
 
     const token = generateToken(user);
+
     user.derniereConnexion = new Date();
     await user.save();
 
@@ -2572,27 +1833,13 @@ export const login = async (req, res) => {
         email: user.email,
         role: user.role,
         emailVerified: user.emailVerified,
+        statutValidation: user.statutValidation,
       },
     });
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }
 };
-
-
-function getRecruiterStatusMessage(status) {
-  const messages = {
-    pending_validation:
-      "Votre compte est en attente de validation par un administrateur.",
-    pending_documents:
-      "Des documents vous ont été demandés. Veuillez les fournir.",
-    pending_info: "Des informations complémentaires vous ont été demandées.",
-    pending_info_and_documents:
-      "Des informations et des documents vous ont été demandés.",
-    pending_revalidation: "Vos réponses sont en cours d'examen.",
-  };
-  return messages[status] || "Statut en attente.";
-}
 
 export const resendConfirmationCode = async (req, res) => {
   try {
@@ -2615,6 +1862,7 @@ export const resendConfirmationCode = async (req, res) => {
     res.status(500).json({ msg: err.message });
   }
 };
+
 
 export const verifyEmail = async (req, res) => {
   try {
@@ -2650,6 +1898,7 @@ export const verifyEmail = async (req, res) => {
     res.status(500).json({ msg: err.message });
   }
 };
+
 
 export const changeEmail = async (req, res) => {
   try {
@@ -2701,7 +1950,6 @@ import { uploadCV } from "../config/multer.js";
 import Recruiter from "../models/Recruiter.js";
 import Notification from "../models/Notification.js";
 import Application from "../models/Application.js";
-import Company from "../models/Company.js";
 import fs from "fs";
 import path from "path";
 import { calculateProfileCompletion } from "../utils/profileCompletion.js";
@@ -2723,7 +1971,6 @@ export const updateProfile = async (req, res) => {
       experiences,
       education,
       autoriserProposition,
-      links,
     } = req.body;
 
     let candidate = await Candidate.findOne({ userId });
@@ -2737,7 +1984,6 @@ export const updateProfile = async (req, res) => {
 
     if (dateOfBirth) candidate.dateOfBirth = dateOfBirth;
     if (bio) candidate.bio = bio;
-    if (links) candidate.links = links;
     if (gender) candidate.gender = gender;
     if (autoriserProposition !== undefined)
       candidate.autoriserProposition = autoriserProposition;
@@ -2834,7 +2080,7 @@ export const deleteCV = async (req, res) => {
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
 
     
-    candidate.cvs.pull(cvId);
+    cv.remove();
     await candidate.save();
 
     res.json({
@@ -2862,6 +2108,7 @@ export const applyToOffer = async (req, res) => {
       return res.status(404).json({ msg: "Profil introuvable." });
     }
 
+    
     if (!user.emailVerified) {
       return res.status(403).json({
         msg: "Veuillez confirmer votre email avant de postuler.",
@@ -2869,6 +2116,7 @@ export const applyToOffer = async (req, res) => {
       });
     }
 
+    
     const completion = calculateProfileCompletion(candidate, user);
 
     if (!completion.canApply) {
@@ -2881,6 +2129,7 @@ export const applyToOffer = async (req, res) => {
       });
     }
 
+    
     const cvExists = candidate.cvs.some((cv) => cv.url === cvUrl);
     if (!cvExists) {
       return res.status(400).json({ msg: "CV invalide." });
@@ -2898,6 +2147,7 @@ export const applyToOffer = async (req, res) => {
         .json({ msg: "Cette offre n'est plus disponible." });
     }
 
+    
     if (!offer.visibility?.acceptsDirectApplications) {
       return res.status(403).json({
         msg: "Cette offre n'accepte pas les candidatures directes.",
@@ -2937,6 +2187,7 @@ export const applyToOffer = async (req, res) => {
 
     await Offer.findByIdAndUpdate(offreId, { $inc: { nombreCandidatures: 1 } });
 
+    
     if (offer.recruteurId?.userId) {
       await Notification.create({
         userId: offer.recruteurId.userId,
@@ -2949,6 +2200,13 @@ export const applyToOffer = async (req, res) => {
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }
+};
+
+
+const getCompanyName = async (companyId) => {
+  const { default: Company } = await import("../models/Company.js");
+  const c = await Company.findById(companyId);
+  return c ? c.name : "Inconnue";
 };
 
 
@@ -3541,6 +2799,7 @@ export const getRecommendedOffers = async (req, res) => {
       .map((s) => s.name?.trim().toLowerCase())
       .filter(Boolean);
 
+    
     if (skillNames.length === 0) {
       return res.json([]);
     }
@@ -3551,7 +2810,6 @@ export const getRecommendedOffers = async (req, res) => {
 
     const offerFilter = {
       actif: true,
-      validationStatus: "approved",
       _id: { $nin: appliedOfferIds },
       skills: {
         $in: skillNames.map((s) => new RegExp(`^${s}$`, "i")),
@@ -3559,7 +2817,7 @@ export const getRecommendedOffers = async (req, res) => {
     };
 
     
-    const candidateWilaya = candidate.residence?.wilaya;
+    const candidateWilaya = candidate.residence?.wilaya || candidate.wilaya;
 
     if (candidateWilaya) {
       offerFilter.wilaya = candidateWilaya;
@@ -3567,17 +2825,20 @@ export const getRecommendedOffers = async (req, res) => {
 
     const offers = await Offer.find(offerFilter)
       .populate("companyId", "name logo")
-      .sort({ nombreCandidatures: -1 })
-      .limit(20);
+      .sort({ nombreCandidatures: -1 }) 
+      .limit(20); 
 
     const scoredOffers = offers.map((offer) => {
       const offerSkills = (offer.skills || []).map((s) =>
         s.trim().toLowerCase()
       );
+
       const matchingSkills = offerSkills.filter((skill) =>
         skillNames.includes(skill)
       );
+
       const totalSkills = offerSkills.length || 1;
+
       const matchScore = Math.round(
         (matchingSkills.length / totalSkills) * 100
       );
@@ -3599,33 +2860,6 @@ export const getRecommendedOffers = async (req, res) => {
     res.json(scoredOffers.slice(0, 10));
   } catch (err) {
     console.error(err);
-    res.status(500).json({ msg: err.message });
-  }
-};
-export const confirmInterview = async (req, res) => {
-  try {
-    const { applicationId } = req.params;
-    const candidate = await Candidate.findOne({ userId: req.user.id });
-
-    const application = await Application.findOne({
-      _id: applicationId,
-      candidateId: candidate._id,
-    });
-
-    if (!application)
-      return res.status(404).json({ msg: "Candidature introuvable" });
-
-    if (application.status !== "entretien") {
-      return res.status(400).json({ msg: "Aucun entretien programmé" });
-    }
-
-    application.interviewDetails.confirmedByCandidate = true;
-    await application.save();
-
-    
-
-    res.json({ msg: "Entretien confirmé ✅" });
-  } catch (err) {
     res.status(500).json({ msg: err.message });
   }
 };
@@ -3711,14 +2945,15 @@ export const getAllActiveOffers = async (req, res) => {
       search,
       type,
       domaine,
-      experienceLevel,
-      minSalary,
-      maxSalary,
+      experienceLevel, 
+      minSalary, 
+      maxSalary, 
     } = req.query;
 
     
-    let query = { actif: true, validationStatus: "approved" };
+    let query = { actif: true };
 
+    
     if (wilaya) {
       query.wilaya = { $regex: new RegExp(`^${wilaya}$`, "i") };
     }
@@ -3735,15 +2970,21 @@ export const getAllActiveOffers = async (req, res) => {
       query.experienceLevel = experienceLevel;
     }
 
+    
+    
     if (minSalary) {
+      
       query.salaryMax = { $gte: parseInt(minSalary) };
     }
 
     if (maxSalary) {
+      
       query.salaryMin = { $lte: parseInt(maxSalary) };
     }
 
+    
     if (search) {
+      
       const matchingCompanies = await Company.find({
         name: { $regex: search, $options: "i" },
       }).select("_id");
@@ -3754,10 +2995,11 @@ export const getAllActiveOffers = async (req, res) => {
         { titre: { $regex: search, $options: "i" } },
         { description: { $regex: search, $options: "i" } },
         { skills: { $in: [new RegExp(search, "i")] } },
-        { companyId: { $in: companyIds } },
+        { companyId: { $in: companyIds } }, 
       ];
     }
 
+    
     if (cursor) {
       const decrypted = fromCursor(cursor);
 
@@ -3765,6 +3007,7 @@ export const getAllActiveOffers = async (req, res) => {
         const { id, value } = decrypted;
 
         if (sort === "popular") {
+          
           query.$and = [
             ...(query.$and || []),
             {
@@ -3775,6 +3018,7 @@ export const getAllActiveOffers = async (req, res) => {
             },
           ];
         } else {
+          
           query.$and = [
             ...(query.$and || []),
             {
@@ -3788,13 +3032,16 @@ export const getAllActiveOffers = async (req, res) => {
       }
     }
 
+    
     let sortQuery = {};
     if (sort === "popular") {
       sortQuery = { nombreCandidatures: -1, _id: -1 };
     } else {
+      
       sortQuery = { datePublication: -1, _id: -1 };
     }
 
+    
     const offers = await Offer.find(query)
       .populate("companyId", "name logo location industry")
       .populate("recruteurId", "position")
@@ -3804,12 +3051,14 @@ export const getAllActiveOffers = async (req, res) => {
     const hasNextPage = offers.length > limit;
     const data = hasNextPage ? offers.slice(0, limit) : offers;
 
+    
     const enrichedData = data.map((offer) => {
       const isNew =
-        new Date() - new Date(offer.datePublication) < 2 * 24 * 60 * 60 * 1000;
+        new Date() - new Date(offer.datePublication) < 2 * 24 * 60 * 60 * 1000; 
       return { ...offer.toObject(), isNew };
     });
 
+    
     let nextCursor = null;
     if (hasNextPage && data.length > 0) {
       const lastItem = data[data.length - 1];
@@ -3863,10 +3112,8 @@ import Offer from "../models/Offer.js";
 import Recruiter from "../models/Recruiter.js";
 import User from "../models/User.js";
 import Candidate from "../models/Candidate.js";
-import Company from "../models/Company.js";
 import Notification from "../models/Notification.js";
 import Application from "../models/Application.js";
-import Admin from "../models/Admin.js";
 import bcrypt from "bcryptjs";
 
 
@@ -3883,6 +3130,7 @@ export const createOffer = async (req, res) => {
     const user = await User.findById(req.user.id);
     const recruiter = await getRecruiterProfile(req.user.id);
 
+    
     if (!user.emailVerified) {
       return res.status(403).json({
         msg: "Veuillez confirmer votre email.",
@@ -3890,11 +3138,10 @@ export const createOffer = async (req, res) => {
       });
     }
 
-    if (recruiter.status !== "validated") {
+    if (user.statutValidation !== "validé") {
       return res.status(403).json({
-        msg: "Votre compte recruteur n'est pas validé.",
-        code: "RECRUITER_NOT_VALIDATED",
-        recruiterStatus: recruiter.status,
+        msg: "Votre compte n'est pas encore validé.",
+        code: "ACCOUNT_NOT_VALIDATED",
       });
     }
 
@@ -3927,6 +3174,7 @@ export const createOffer = async (req, res) => {
       candidateSearchMode,
     } = req.body;
 
+    
     if (!titre || !description || !requirements) {
       return res.status(400).json({
         msg: "Titre, description et requirements sont obligatoires.",
@@ -3952,8 +3200,8 @@ export const createOffer = async (req, res) => {
       },
       candidateSearchMode: candidateSearchMode || "disabled",
       validationStatus: "pending",
-      actif: false,
-      datePublication: null,
+      actif: false, 
+      datePublication: null, 
     });
 
     const savedOffer = await newOffer.save();
@@ -4090,14 +3338,11 @@ export const getOfferApplications = async (req, res) => {
       })
       .lean();
 
-    const validApplications = applications.filter(
-      (app) => app.candidateId !== null
-    );
     
     const total = await Application.countDocuments({ offerId: offerId });
 
     return res.json({
-      data: validApplications,
+      data: applications,
       meta: {
         total,
         page,
@@ -4194,22 +3439,11 @@ export const updateRecruiterProfile = async (req, res) => {
   }
 };
 
-function getStatusMessage(status) {
-  const messages = {
-    pending_validation: "En attente de validation initiale",
-    pending_documents: "Documents demandés par l'administration",
-    pending_info: "Informations complémentaires demandées",
-    pending_revalidation: "Réponse en cours d'examen",
-    rejected: "Compte refusé",
-  };
-  return messages[status] || status;
-}
-
-
 export const updateCompanyDetails = async (req, res) => {
   try {
     const recruiter = await getRecruiterProfile(req.user.id);
 
+    
     if (!recruiter.isAdmin) {
       return res.status(403).json({
         msg: "Accès refusé. Seul l'administrateur de l'entreprise peut modifier ces informations.",
@@ -4217,12 +3451,17 @@ export const updateCompanyDetails = async (req, res) => {
     }
 
     
-    const { website, description, industry, location, size, logo } = req.body;
+    const { Company } = await import("../models/Company.js"); 
+
+    const { name, website, description, industry, location, size, logo } =
+      req.body;
 
     const updatedCompany = await Company.findByIdAndUpdate(
       recruiter.companyId._id,
       {
         $set: {
+          
+          
           website,
           description,
           industry,
@@ -4242,12 +3481,12 @@ export const updateCompanyDetails = async (req, res) => {
     res.status(500).json({ msg: err.message });
   }
 };
-
 export const getRecruiterDashboard = async (req, res) => {
   try {
     const recruiter = await getRecruiterProfile(req.user.id);
 
     const now = new Date();
+    const thirtyDaysAgo = new Date(now - 30 * 24 * 60 * 60 * 1000);
     const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
 
     const myOfferIds = await Offer.find({
@@ -4264,32 +3503,40 @@ export const getRecruiterDashboard = async (req, res) => {
       topOffers,
       recentApplications,
     ] = await Promise.all([
+      
       Offer.countDocuments({
         recruteurId: recruiter._id,
         actif: true,
         validationStatus: "approved",
       }),
+      
       Offer.countDocuments({
         recruteurId: recruiter._id,
         validationStatus: "pending",
       }),
+      
       Offer.countDocuments({
         recruteurId: recruiter._id,
         validationStatus: { $in: ["rejected", "changes_requested"] },
       }),
+      
       Application.countDocuments({ offerId: { $in: myOfferIds } }),
+      
       Application.countDocuments({
         offerId: { $in: myOfferIds },
         datePostulation: { $gte: sevenDaysAgo },
       }),
+      
       Application.aggregate([
         { $match: { offerId: { $in: myOfferIds } } },
         { $group: { _id: "$status", count: { $sum: 1 } } },
       ]),
+      
       Offer.find({ recruteurId: recruiter._id, actif: true })
         .sort({ nombreCandidatures: -1 })
         .limit(5)
         .select("titre nombreCandidatures datePublication"),
+      
       Application.find({ offerId: { $in: myOfferIds } })
         .populate({
           path: "candidateId",
@@ -4317,8 +3564,7 @@ export const getRecruiterDashboard = async (req, res) => {
     if (recruiter.status !== "validated") {
       alerts.push({
         type: "warning",
-        message: `Statut du compte : ${recruiter.status}`,
-        statusMessage: getStatusMessage(recruiter.status),
+        message: "Votre compte recruteur est en attente de validation",
       });
     }
     if (pendingOffers > 0) {
@@ -4331,18 +3577,6 @@ export const getRecruiterDashboard = async (req, res) => {
       alerts.push({
         type: "error",
         message: `${rejectedOffers} offre(s) nécessitent des modifications`,
-      });
-    }
-
-    
-    const pendingRequests = recruiter.validationRequests.filter(
-      (r) => r.status === "pending"
-    );
-    if (pendingRequests.length > 0) {
-      alerts.push({
-        type: "action_required",
-        message: "Des documents ou informations sont demandés",
-        requests: pendingRequests,
       });
     }
 
@@ -4433,6 +3667,8 @@ export const getOfferStats = async (req, res) => {
   }
 };
 
+
+
 export const scheduleInterview = async (req, res) => {
   try {
     const recruiter = await getRecruiterProfile(req.user.id);
@@ -4444,6 +3680,7 @@ export const scheduleInterview = async (req, res) => {
       return res.status(404).json({ msg: "Candidature introuvable." });
     }
 
+    
     const offer = await Offer.findById(application.offerId);
     if (offer.recruteurId.toString() !== recruiter._id.toString()) {
       return res.status(403).json({ msg: "Non autorisé." });
@@ -4466,6 +3703,7 @@ export const scheduleInterview = async (req, res) => {
     };
     await application.save();
 
+    
     const candidate = await Candidate.findById(application.candidateId);
     await Notification.create({
       userId: candidate.userId,
@@ -4473,9 +3711,18 @@ export const scheduleInterview = async (req, res) => {
         scheduledAt
       ).toLocaleDateString("fr-FR")}`,
       type: "validation",
+      category: "application",
+      actionUrl: `/applications/${application._id}`,
     });
 
     
+    await logActivity(
+      recruiter.companyId,
+      recruiter._id,
+      "interview_scheduled",
+      { type: "application", id: application._id },
+      { candidateId: application.candidateId, scheduledAt }
+    );
 
     res.json({ msg: "Entretien programmé avec succès.", application });
   } catch (err) {
@@ -4486,13 +3733,14 @@ export const scheduleInterview = async (req, res) => {
 export const getRecruiterProfileEndpoint = async (req, res) => {
   try {
     const recruiter = await Recruiter.findOne({ userId: req.user.id })
-      .populate("userId", "nom email emailVerified")
+      .populate("userId", "nom email emailVerified statutValidation")
       .populate("companyId");
 
     if (!recruiter) {
       return res.status(404).json({ msg: "Profil recruteur introuvable" });
     }
 
+    
     const alerts = [];
     const user = await User.findById(req.user.id);
 
@@ -4504,15 +3752,14 @@ export const getRecruiterProfileEndpoint = async (req, res) => {
       });
     }
 
-    
-    if (recruiter.status === "pending_validation") {
+    if (user.statutValidation === "en attente") {
       alerts.push({
         type: "warning",
         message: "Compte en attente de validation par un administrateur",
       });
     }
 
-    if (recruiter.status === "rejected") {
+    if (user.statutValidation === "rejeté") {
       alerts.push({
         type: "error",
         message: "Compte rejeté",
@@ -4527,6 +3774,7 @@ export const getRecruiterProfileEndpoint = async (req, res) => {
       });
     }
 
+    
     const pendingRequests = recruiter.validationRequests?.filter(
       (r) => r.status === "pending"
     );
@@ -4545,7 +3793,7 @@ export const getRecruiterProfileEndpoint = async (req, res) => {
       alerts,
       canPostOffers:
         user.emailVerified &&
-        recruiter.status === "validated" && 
+        user.statutValidation === "validé" &&
         recruiter.companyId?.status === "active" &&
         recruiter.permissions.postJobs,
     });
@@ -4602,7 +3850,9 @@ export const submitValidationResponse = async (req, res) => {
     request.status = "submitted";
 
     
-    recruiter.status = "pending_revalidation";
+    await User.findByIdAndUpdate(req.user.id, {
+      statutValidation: "en attente", 
+    });
 
     await recruiter.save();
 
@@ -4622,95 +3872,6 @@ export const submitValidationResponse = async (req, res) => {
     await Promise.all(notifPromises);
 
     res.json({ msg: "Réponse soumise. Vous serez notifié du résultat." });
-  } catch (err) {
-    res.status(500).json({ msg: err.message });
-  }
-};
-export const getRecruiterById = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    
-    
-    const recruiter = await Recruiter.findById(id)
-      .populate("userId", "nom email role accountStatus createdAt")
-      .populate("companyId", "name logo website location description status");
-
-    if (!recruiter) {
-      return res.status(404).json({ msg: "Recruteur introuvable" });
-    }
-
-    
-
-    
-    const isAdmin = req.user && req.user.role === "admin";
-
-    
-    if (!isAdmin) {
-      
-      if (recruiter.status !== "validated") {
-        return res.status(404).json({ msg: "Ce profil n'est pas accessible." });
-      }
-      
-      if (recruiter.companyId?.status !== "active") {
-        return res
-          .status(404)
-          .json({ msg: "L'entreprise de ce recruteur n'est pas active." });
-      }
-    }
-
-    
-
-    
-    let responseData = {
-      _id: recruiter._id,
-      nom: recruiter.userId.nom,
-      position: recruiter.position,
-      entreprise: {
-        _id: recruiter.companyId._id,
-        nom: recruiter.companyId.name,
-        logo: recruiter.companyId.logo,
-        location: recruiter.companyId.location,
-        website: recruiter.companyId.website,
-        description: recruiter.companyId.description,
-      },
-      dateCreation: recruiter.createdAt,
-    };
-
-    
-    if (isAdmin) {
-      responseData.adminDetails = {
-        email: recruiter.userId.email, 
-        telephone: recruiter.telephone, 
-        status: recruiter.status, 
-        userStatus: recruiter.userId.accountStatus, 
-        isAdminOfCompany: recruiter.isAdmin,
-        permissions: recruiter.permissions,
-        validationRequests: recruiter.validationRequests, 
-        rejectionReason: recruiter.rejectionReason,
-        userId: recruiter.userId._id, 
-      };
-    }
-
-    res.json(responseData);
-  } catch (err) {
-    res.status(500).json({ msg: err.message });
-  }
-};
-export const getCandidateFullProfile = async (req, res) => {
-  try {
-    const { candidateId } = req.params;
-
-    
-    const candidate = await Candidate.findById(candidateId)
-      .populate("userId", "nom email") 
-      .select("-favoris"); 
-
-    if (!candidate) {
-      return res.status(404).json({ msg: "Candidat introuvable" });
-    }
-
-    res.json(candidate);
   } catch (err) {
     res.status(500).json({ msg: err.message });
   }
@@ -4898,9 +4059,127 @@ export const replyToTicket = async (req, res) => {
 };
 
 
-=== middleware\adminPermissions.js ===
-import Admin from "../models/Admin.js"; 
 
+export const getTicketsByLabel = async (req, res) => {
+  try {
+    const admin = await Admin.findOne({ userId: req.user.id });
+    if (!admin.hasPermission("handleSupportTickets")) {
+      return res.status(403).json({ msg: "Permission refusée." });
+    }
+
+    const { status, page = 1, limit = 20 } = req.query;
+
+    let query = {};
+
+    
+    if (admin.label !== "super_admin") {
+      query.assignedToLabel = admin.label;
+    }
+
+    if (status) query.status = status;
+
+    const tickets = await SupportTicket.find(query)
+      .populate("userId", "nom email role")
+      .sort({ priority: -1, createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit));
+
+    const total = await SupportTicket.countDocuments(query);
+
+    res.json({
+      data: tickets,
+      meta: { total, page: parseInt(page), limit: parseInt(limit) },
+    });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+export const respondToTicket = async (req, res) => {
+  try {
+    const admin = await Admin.findOne({ userId: req.user.id });
+    if (!admin.hasPermission("handleSupportTickets")) {
+      return res.status(403).json({ msg: "Permission refusée." });
+    }
+
+    const { ticketId } = req.params;
+    const { content, newStatus, enableChat } = req.body;
+    const attachments = req.files?.map((f) => f.path.replace(/\\/g, "/")) || [];
+
+    const ticket = await SupportTicket.findById(ticketId);
+    if (!ticket) return res.status(404).json({ msg: "Ticket introuvable." });
+
+    
+    if (!ticket.assignedTo) {
+      ticket.assignedTo = admin._id;
+    }
+
+    ticket.messages.push({
+      from: "admin",
+      content,
+      adminId: req.user.id,
+      attachments,
+    });
+
+    if (newStatus) ticket.status = newStatus;
+    if (newStatus === "resolved") ticket.resolvedAt = new Date();
+    if (newStatus === "closed") ticket.closedAt = new Date();
+    if (enableChat !== undefined) ticket.chatEnabled = enableChat;
+
+    await ticket.save();
+
+    
+    await Notification.create({
+      userId: ticket.userId,
+      message: `Réponse de l'administration sur votre ticket: "${ticket.subject}"`,
+      type: "info",
+      actionUrl: `/support/tickets/${ticket._id}`,
+    });
+
+    await logAdminAction(
+      req.user.id,
+      "ticket_responded",
+      { type: "ticket", id: ticket._id },
+      {},
+      req
+    );
+
+    res.json({ msg: "Réponse envoyée.", ticket });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+export const reassignTicket = async (req, res) => {
+  try {
+    const admin = await Admin.findOne({ userId: req.user.id });
+    const { ticketId } = req.params;
+    const { newLabel, newAdminId } = req.body;
+
+    const ticket = await SupportTicket.findById(ticketId);
+    if (!ticket) return res.status(404).json({ msg: "Ticket introuvable." });
+
+    if (newLabel) ticket.assignedToLabel = newLabel;
+    if (newAdminId) ticket.assignedTo = newAdminId;
+
+    await ticket.save();
+
+    await logAdminAction(
+      req.user.id,
+      "ticket_reassigned",
+      { type: "ticket", id: ticket._id },
+      { newLabel, newAdminId },
+      req
+    );
+
+    res.json({ msg: "Ticket réassigné.", ticket });
+  } catch (err) {
+    res.status(500).json({ msg: err.message });
+  }
+};
+
+
+=== middleware\adminPermissions.js ===
 export const requireAdminPermission = (permission) => {
   return async (req, res, next) => {
     try {
@@ -4930,6 +4209,7 @@ export const requireAdminPermission = (permission) => {
     }
   };
 };
+
 
 export const requireActiveAdmin = async (req, res, next) => {
   try {
@@ -4966,51 +4246,38 @@ export default function auth(req, res, next) {
 }
 
 
-=== middleware\optionalAuth.js ===
-import jwt from "jsonwebtoken";
-
-export const optionalAuth = (req, res, next) => {
-  const token = req.header("Authorization");
-
-  if (!token) {
-    req.user = null; 
-    return next();
-  }
-
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded; 
-  } catch (err) {
-    req.user = null; 
-  }
-  next();
-};
-
-
 === middleware\requireEmailVerification.js ===
-import User from "../models/User.js";
-
-export const requireEmailVerification = async (req, res, next) => {
+export const requireEmailVerification = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ msg: "Utilisateur non authentifié." });
   }
 
-  try {
-    const user = await User.findById(req.user.id);
-    if (!user) {
-      return res.status(404).json({ msg: "Utilisateur introuvable." });
-    }
+  
+  
+  
 
-    if (!user.emailVerified) {
-      return res.status(403).json({
-        msg: "Veuillez confirmer votre adresse e-mail pour effectuer cette action.",
-        code: "EMAIL_NOT_VERIFIED",
-      });
+  
+  
+  
+
+  
+  import("../models/User.js").then(async ({ default: User }) => {
+    try {
+      const user = await User.findById(req.user.id);
+      if (!user)
+        return res.status(404).json({ msg: "Utilisateur introuvable." });
+
+      if (!user.emailVerified) {
+        return res.status(403).json({
+          msg: "Veuillez confirmer votre adresse e-mail pour effectuer cette action.",
+          code: "EMAIL_NOT_VERIFIED", 
+        });
+      }
+      next();
+    } catch (err) {
+      res.status(500).json({ msg: err.message });
     }
-    next();
-  } catch (err) {
-    res.status(500).json({ msg: err.message });
-  }
+  });
 };
 
 
@@ -5022,6 +4289,17 @@ export const authRole = (roles = []) => {
     }
     next();
   };
+};
+
+
+=== middleware\validate.js ===
+import { validationResult } from "express-validator";
+
+export const validate = (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty())
+    return res.status(400).json({ errors: errors.array() });
+  next();
 };
 
 
@@ -5151,10 +4429,6 @@ const adminLogSchema = new mongoose.Schema(
         "ticket_responded",
         "ticket_closed",
         "ticket_reassigned",
-        "company_created_by_admin",
-        "company_updated_by_admin",
-        "company_admin_assigned",
-        "company_admin_removed",
       ],
       required: true,
       index: true,
@@ -5335,6 +4609,7 @@ export default mongoose.model("Application", applicationSchema);
 === models\Candidate.js ===
 import mongoose from "mongoose";
 
+
 const educationSchema = new mongoose.Schema({
   institut: { type: String, required: true },
   degree: { type: String, required: true }, 
@@ -5344,6 +4619,8 @@ const educationSchema = new mongoose.Schema({
   description: { type: String },
 });
 
+
+
 const experienceSchema = new mongoose.Schema({
   jobTitle: { type: String, required: true },
   company: { type: String, required: true },
@@ -5351,6 +4628,7 @@ const experienceSchema = new mongoose.Schema({
   endDate: { type: Date }, 
   description: { type: String },
 });
+
 
 const skillSchema = new mongoose.Schema({
   name: { type: String, required: true },
@@ -5361,8 +4639,10 @@ const skillSchema = new mongoose.Schema({
   },
 });
 
+
 const candidateSchema = new mongoose.Schema(
   {
+    
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -5370,6 +4650,7 @@ const candidateSchema = new mongoose.Schema(
       unique: true,
     },
 
+    
     dateOfBirth: { type: Date },
     bio: { type: String, maxLength: 1000 },
     gender: {
@@ -5377,20 +4658,24 @@ const candidateSchema = new mongoose.Schema(
       enum: ["homme", "femme"],
     },
 
+    
     residence: {
       wilaya: { type: String },
       commune: { type: String },
       address: { type: String },
     },
 
+    
     searchPreferences: {
-      wilayas: [{ type: String }],
+      wilayas: [{ type: String }], 
       remoteOnly: { type: Boolean, default: false },
       willingToRelocate: { type: Boolean, default: false },
     },
 
+    
     desiredPosition: { type: String },
 
+    
     desiredJobTypes: [
       {
         type: String,
@@ -5406,17 +4691,14 @@ const candidateSchema = new mongoose.Schema(
       },
     ],
 
-    profilePicture: { type: String },
+    
+    profilePicture: { type: String }, 
     telephone: { type: String },
-    links: {
-      website: { type: String },
-      linkedin: { type: String },
-      github: { type: String },
-      portfolio: { type: String },
-    },
 
+    
     autoriserProposition: { type: Boolean, default: true },
 
+    
     favoris: [
       {
         offerId: { type: mongoose.Schema.Types.ObjectId, ref: "Offer" },
@@ -5424,6 +4706,7 @@ const candidateSchema = new mongoose.Schema(
       },
     ],
 
+    
     cvs: [
       {
         url: { type: String, required: true },
@@ -5432,15 +4715,14 @@ const candidateSchema = new mongoose.Schema(
       },
     ],
 
+    
     skills: [skillSchema],
     experiences: [experienceSchema],
     education: [educationSchema],
   },
   { timestamps: true }
 );
-candidateSchema.index({ userId: 1 });
-candidateSchema.index({ "residence.wilaya": 1 });
-candidateSchema.index({ autoriserProposition: 1 });
+
 export default mongoose.model("Candidate", candidateSchema);
 
 
@@ -5466,8 +4748,7 @@ const companySchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-companySchema.index({ status: 1 });
-companySchema.index({ name: "text" });
+
 export default mongoose.model("Company", companySchema);
 
 
@@ -5492,9 +4773,6 @@ const notificationSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-
-notificationSchema.index({ userId: 1, lu: 1 });
-notificationSchema.index({ userId: 1, date: -1 });
 
 export default mongoose.model("Notification", notificationSchema);
 
@@ -5590,6 +4868,7 @@ export default mongoose.model("Offer", offerSchema);
 === models\Recruiter.js ===
 import mongoose from "mongoose";
 
+
 const recruiterSchema = new mongoose.Schema(
   {
     userId: {
@@ -5608,21 +4887,16 @@ const recruiterSchema = new mongoose.Schema(
     position: { type: String },
 
     
-    status: {
+    
+    pendingAction: {
       type: String,
       enum: [
-        "pending_validation", 
+        null, 
         "pending_documents", 
         "pending_info", 
-        "pending_info_and_documents",
-        "pending_revalidation", 
-        "validated", 
-        "rejected", 
       ],
-      default: "pending_validation",
+      default: null,
     },
-
-    rejectionReason: String,
 
     
     validationRequests: [
@@ -5650,11 +4924,13 @@ const recruiterSchema = new mongoose.Schema(
       },
     ],
 
+    rejectionReason: String,
+
     
     permissions: {
       postJobs: { type: Boolean, default: true },
       reviewCandidates: { type: Boolean, default: true },
-      scheduleInterviews: { type: Boolean, default: true },
+      scheduleInterviews: { type: Boolean, default: false },
       manageTeam: { type: Boolean, default: false },
       editCompany: { type: Boolean, default: false },
     },
@@ -5674,20 +4950,6 @@ const recruiterSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-
-recruiterSchema.index({ userId: 1 });
-recruiterSchema.index({ companyId: 1 });
-recruiterSchema.index({ status: 1 });
-
-
-recruiterSchema.methods.canPerformActions = function () {
-  return this.status === "validated";
-};
-
-
-recruiterSchema.methods.hasPendingRequests = function () {
-  return this.validationRequests.some((r) => r.status === "pending");
-};
 
 export default mongoose.model("Recruiter", recruiterSchema);
 
@@ -5804,43 +5066,19 @@ const userSchema = new mongoose.Schema(
       enum: ["candidat", "recruteur", "admin"],
       required: true,
     },
-
-    
     emailVerified: {
       type: Boolean,
       default: false,
     },
-
-    
-    accountStatus: {
+    statutValidation: {
       type: String,
-      enum: ["active", "suspended", "banned"],
-      default: "active",
+      enum: ["en attente", "validé", "rejeté"],
+      default: "validé",
     },
-    suspensionReason: String,
-    suspendedUntil: Date,
-
     derniereConnexion: Date,
   },
   { timestamps: true }
 );
-
-userSchema.index({ email: 1 });
-userSchema.index({ role: 1 });
-userSchema.index({ createdAt: -1 });
-userSchema.index({ accountStatus: 1 });
-
-
-userSchema.methods.canLogin = function () {
-  if (this.accountStatus === "banned") return false;
-  if (this.accountStatus === "suspended") {
-    if (this.suspendedUntil && new Date() > this.suspendedUntil) {
-      return true; 
-    }
-    return false;
-  }
-  return true;
-};
 
 export default mongoose.model("User", userSchema);
 
@@ -5852,19 +5090,16 @@ import { authRole } from "../middleware/roles.js";
 import Admin from "../models/Admin.js";
 import {
   
-  getRecruiters,
+  getPendingRecruiters,
   validateRecruiter,
   rejectRecruiter,
   requestRecruiterDocuments,
-  requestMultipleValidationItems,
-  cancelValidationRequest,
 
   
   getAllUsers,
   banUser,
   unBanUser,
   sendMessageToUser,
-  getCandidateDetailsAdmin,
 
   
   createAdmin,
@@ -5878,8 +5113,6 @@ import {
   getPendingCompanies,
   validateCompany,
   rejectCompany,
-  getCompanyDetailsAdmin,
-  getAllCompanies,
 
   
   getPendingOffers,
@@ -5888,21 +5121,11 @@ import {
   deleteOfferAdmin,
   getManualSelectionOffers,
   proposeCandidateToOffer,
-  toggleOfferVisibility,
 
   
   getGlobalStats,
   getTrends,
   getAdminLogs,
-
-  
-  createCompanyByAdmin,
-  getCompanyRecruiters,
-  assignCompanyAdmin,
-  removeCompanyAdmin,
-  updateCompanyByAdmin,
-  getOfferDetailsAdmin,
-  updateOfferByAdmin,
 } from "../controllers/adminController.js";
 
 import { createSkill, deleteSkill } from "../controllers/skillController.js";
@@ -5962,9 +5185,9 @@ router.get("/stats/trends", requirePermission("viewStats"), getTrends);
 
 
 router.get(
-  "/recruteurs",
+  "/recruteurs/en-attente",
   requirePermission("validateRecruiters"),
-  getRecruiters
+  getPendingRecruiters
 );
 router.put(
   "/recruteurs/valider/:id",
@@ -5980,17 +5203,6 @@ router.post(
   "/recruteurs/:recruiterId/request-documents",
   requirePermission("validateRecruiters"),
   requestRecruiterDocuments
-);
-router.post(
-  "/recruteurs/:recruiterId/request-multiple",
-  requirePermission("validateRecruiters"),
-  requestMultipleValidationItems
-);
-
-router.put(
-  "/recruteurs/:id/cancel-request",
-  requirePermission("validateRecruiters"),
-  cancelValidationRequest
 );
 
 
@@ -6025,12 +5237,6 @@ router.put(
 
 
 router.get(
-  "/entreprises/all",
-  requirePermission("validateCompanies"),
-  getAllCompanies
-);
-
-router.get(
   "/entreprises/en-attente",
   requirePermission("validateCompanies"),
   getPendingCompanies
@@ -6046,17 +5252,6 @@ router.put(
   rejectCompany
 );
 
-router.get(
-  "/entreprises/:companyId",
-  requirePermission("validateCompanies"),
-  getCompanyDetailsAdmin
-);
-
-router.put(
-  "/entreprises/:id",
-  requirePermission("validateCompanies"),
-  updateCompanyByAdmin
-);
 
 router.get(
   "/offres/en-attente",
@@ -6089,28 +5284,6 @@ router.post(
   proposeCandidateToOffer
 );
 
-router.get(
-  "/offres/:id/details",
-  requirePermission("validateOffers"),
-  getOfferDetailsAdmin
-);
-router.put(
-  "/offres/:id/update",
-  requirePermission("validateOffers"),
-  updateOfferByAdmin
-);
-router.put(
-  "/offres/:id/visibility",
-  requirePermission("validateOffers"),
-  toggleOfferVisibility
-);
-
-
-router.get(
-  "/candidates/:id",
-  requirePermission("viewStats"),
-  getCandidateDetailsAdmin
-);
 
 router.get(
   "/announcements",
@@ -6167,38 +5340,6 @@ router.get("/logs", requirePermission("viewLogs"), getAdminLogs);
 
 router.post("/skills", createSkill);
 router.delete("/skills/:id", deleteSkill);
-
-
-
-
-
-
-router.post(
-  "/entreprises/create",
-  requirePermission("validateCompanies"),
-  createCompanyByAdmin
-);
-
-
-router.get(
-  "/entreprises/:companyId/recruiters",
-  requirePermission("validateCompanies"),
-  getCompanyRecruiters
-);
-
-
-router.post(
-  "/entreprises/assign-admin",
-  requirePermission("validateCompanies"),
-  assignCompanyAdmin
-);
-
-
-router.delete(
-  "/entreprises/remove-admin/:recruiterId",
-  requirePermission("validateCompanies"),
-  removeCompanyAdmin
-);
 
 export default router;
 
@@ -6281,7 +5422,6 @@ import {
   deleteEducation,
   getCandidateStats,
   getRecommendedOffers,
-  confirmInterview,
 } from "../controllers/candidateController.js";
 
 const router = express.Router();
@@ -6323,9 +5463,6 @@ router.delete("/favorites/:offerId", removeFromFavorites);
 
 
 router.get("/recommended-offers", getRecommendedOffers);
-
-
-router.put("/applications/:applicationId/confirm-interview", confirmInterview);
 
 export default router;
 
@@ -6372,12 +5509,10 @@ export default router;
 === routes\recruiterRoutes.js ===
 import express from "express";
 import auth from "../middleware/auth.js";
-import { optionalAuth } from "../middleware/optionalAuth.js";
 import { authRole } from "../middleware/roles.js";
 import { requireEmailVerification } from "../middleware/requireEmailVerification.js";
 import { uploadImage, uploadAttachments } from "../config/multer.js";
 import {
-  getRecruiterById,
   createOffer,
   getMyOffers,
   updateOffer,
@@ -6392,18 +5527,15 @@ import {
   getOfferStats,
   scheduleInterview,
   submitValidationResponse,
-  getCandidateFullProfile,
 } from "../controllers/recruiterController.js";
 
 const router = express.Router();
-router.get("/public/:id", optionalAuth, getRecruiterById);
 
 router.use(auth, authRole(["recruteur"]));
 
 
 router.get("/profile", getRecruiterProfileEndpoint);
 router.put("/profile", updateRecruiterProfile);
-router.get("/candidates/:candidateId", getCandidateFullProfile);
 
 
 router.get("/dashboard", getRecruiterDashboard);
@@ -6495,7 +5627,7 @@ export const seedAdmin = async () => {
       motDePasse: hash,
       role: "admin",
       emailVerified: true,
-      accountStatus: "active",
+      statutValidation: "validé",
     });
 
     await Admin.create({
@@ -6585,16 +5717,7 @@ export const calculateProfileCompletion = (candidate, user) => {
   const canApply = Object.values(minimumRequiredForApplication).every(Boolean);
   const missingForApplication = Object.entries(minimumRequiredForApplication)
     .filter(([_, v]) => !v)
-    .map(([k]) => {
-      
-      const labels = {
-        telephone: "Numéro de téléphone",
-        residence: "Localisation (wilaya)",
-        cv: "CV",
-        skills: "Au moins une compétence",
-      };
-      return labels[k] || k;
-    });
+    .map(([k]) => k);
 
   return {
     percentage: Math.round((completed / total) * 100),

@@ -1,5 +1,31 @@
 import mongoose from "mongoose";
 
+const educationSchema = new mongoose.Schema({
+  institut: { type: String, required: true },
+  degree: { type: String, required: true }, // Diplôme
+  fieldOfStudy: { type: String }, // Domaine d'étude
+  startDate: { type: Date },
+  endDate: { type: Date },
+  description: { type: String },
+});
+
+const experienceSchema = new mongoose.Schema({
+  jobTitle: { type: String, required: true },
+  company: { type: String, required: true },
+  startDate: { type: Date },
+  endDate: { type: Date }, // null = poste actuel
+  description: { type: String },
+});
+
+const skillSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  level: {
+    type: String,
+    enum: ["beginner", "intermediate", "expert"],
+    default: "beginner",
+  },
+});
+
 const candidateSchema = new mongoose.Schema(
   {
     userId: {
@@ -8,37 +34,76 @@ const candidateSchema = new mongoose.Schema(
       required: true,
       unique: true,
     },
-    telephone: { type: String },
-    wilaya: { type: String },
 
-    autoriserProposition: {
-      type: Boolean,
-      default: true, // Activé par défaut
+    dateOfBirth: { type: Date },
+    bio: { type: String, maxLength: 1000 },
+    gender: {
+      type: String,
+      enum: ["homme", "femme"],
     },
-    favoris: [{ type: mongoose.Schema.Types.ObjectId, ref: "Offer" }],
+
+    residence: {
+      wilaya: { type: String },
+      commune: { type: String },
+      address: { type: String },
+    },
+
+    searchPreferences: {
+      wilayas: [{ type: String }],
+      remoteOnly: { type: Boolean, default: false },
+      willingToRelocate: { type: Boolean, default: false },
+    },
+
+    desiredPosition: { type: String },
+
+    desiredJobTypes: [
+      {
+        type: String,
+        enum: [
+          "full-time",
+          "part-time",
+          "remote",
+          "internship",
+          "freelance",
+          "CDI",
+          "CDD",
+        ],
+      },
+    ],
+
+    profilePicture: { type: String },
+    telephone: { type: String },
+    links: {
+      website: { type: String },
+      linkedin: { type: String },
+      github: { type: String },
+      portfolio: { type: String },
+    },
+
+    autoriserProposition: { type: Boolean, default: true },
+
+    favoris: [
+      {
+        offerId: { type: mongoose.Schema.Types.ObjectId, ref: "Offer" },
+        savedAt: { type: Date, default: Date.now },
+      },
+    ],
+
     cvs: [
       {
         url: { type: String, required: true },
         dateDepot: { type: Date, default: Date.now },
-        score: { type: Number, default: 0 }, // Score calculé automatiquement
+        score: { type: Number, default: 0 },
       },
     ],
 
-    historique: [
-      {
-        offreId: { type: mongoose.Schema.Types.ObjectId, ref: "Offer" },
-        entreprise: { type: String },
-        statut: {
-          type: String,
-          enum: ["en attente", "acceptée", "rejetée"],
-          default: "en attente",
-        },
-        date: { type: Date, default: Date.now },
-        changements: { type: Number, default: 0 },
-      },
-    ],
+    skills: [skillSchema],
+    experiences: [experienceSchema],
+    education: [educationSchema],
   },
   { timestamps: true }
 );
-
+candidateSchema.index({ userId: 1 });
+candidateSchema.index({ "residence.wilaya": 1 });
+candidateSchema.index({ autoriserProposition: 1 });
 export default mongoose.model("Candidate", candidateSchema);

@@ -12,11 +12,24 @@ import recruiterRoutes from "./routes/recruiterRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import offerRoutes from "./routes/offerRoutes.js";
 import notificationRoutes from "./routes/notificationRoutes.js";
+import skillRoutes from "./routes/skillRoutes.js";
+import supportRoutes from "./routes/supportRoutes.js";
+import announcementRoutes from "./routes/announcementRoutes.js";
 
 dotenv.config();
 const app = express();
 
-app.use(cors());
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "ngrok-skip-browser-warning",
+    ],
+  })
+);
 app.use(express.json());
 app.use(morgan("dev"));
 app.use("/uploads", express.static("uploads"));
@@ -27,12 +40,18 @@ async function startServer() {
     setupFolders();
     await seedAdmin();
 
+    // Routes publiques
+    app.use("/api/skills", skillRoutes);
+    app.use("/api/offers", offerRoutes);
+
+    // Routes authentifiées
     app.use("/api/auth", authRoutes);
     app.use("/api/candidates", candidateRoutes);
     app.use("/api/recruiters", recruiterRoutes);
     app.use("/api/admin", adminRoutes);
-    app.use("/api/offers", offerRoutes);
     app.use("/api/notifications", notificationRoutes);
+    app.use("/api/support", supportRoutes); // AJOUTÉ
+    app.use("/api/announcements", announcementRoutes); // AJOUTÉ
 
     app.get("/", (req, res) => res.send("✅ API Recrutement opérationnelle !"));
 

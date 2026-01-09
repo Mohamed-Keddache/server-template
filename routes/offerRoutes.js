@@ -1,6 +1,4 @@
 import express from "express";
-import auth from "../middleware/auth.js";
-import { authRole } from "../middleware/roles.js";
 import {
   getAllActiveOffers,
   getOfferDetails,
@@ -8,8 +6,10 @@ import {
 
 const router = express.Router();
 
-// Routes accessibles aux candidats et recruteurs connectés
-router.get("/", auth, authRole(["candidat", "recruteur"]), getAllActiveOffers);
-router.get("/:id", auth, authRole(["candidat", "recruteur"]), getOfferDetails);
+// Récupérer toutes les offres (avec filtres et recherche)
+router.get("/", getAllActiveOffers);
+
+// Récupérer les détails d'une offre spécifique
+router.get("/:id", getOfferDetails);
 
 export default router;
